@@ -1,0 +1,142 @@
+/* ============================================================
+   JIGSAW — Design Tokens
+   Systematic Grayscale · Dark-first · Right angles (0 radius)
+   Only black / white / gray. No accent color. No shadows.
+   ============================================================ */
+
+:root {
+  /* ---- surfaces ---- */
+  --bg-app:      #0a0a0a;   /* app shell / page background */
+  --bg-surface:  #111111;   /* panels */
+  --bg-raised:   #161616;   /* raised cards, inputs */
+  --bg-overlay:  #1b1b1b;   /* hover states, menus */
+  --bg-active:   #232323;   /* pressed / selected */
+  --bg-sunken:   #0d0d0d;   /* wells, code blocks */
+
+  /* ---- lines (1px) ---- */
+  --line-1:      #242424;   /* default borders */
+  --line-2:      #2f2f2f;   /* stronger */
+  --line-strong: #4a4a4a;   /* focus / active */
+  --line-faint:  #1a1a1a;   /* separators */
+
+  /* ---- text ---- */
+  --text-1:      #f2f2f2;   /* primary */
+  --text-2:      #a3a3a3;   /* secondary */
+  --text-3:      #6d6d6d;   /* muted / placeholder */
+  --text-4:      #4a4a4a;   /* disabled */
+
+  /* ---- black / white ---- */
+  --white:       #ffffff;
+  --black:       #000000;
+
+  /* ---- state (grayscale only) ---- */
+  --ok-fill:     #ffffff;   /* success badge */
+  --ok-text:     #0a0a0a;
+  --run-fill:    #ffffff;   /* running pulse */
+  --fail-border: #6d6d6d;   /* failed border */
+
+  /* ---- typography ---- */
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-headline: "Hanken Grotesk", "Inter", -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, "SF Mono", "Courier New", monospace;
+
+  /* ---- shape: right angles only ---- */
+  --radius: 0px;
+
+  /* ---- 8px spacing system (plus 4px sub-step) ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* ---- misc ---- */
+  --gutter: 1px;
+  --panel-w: 300px;
+  --header-h: 52px;
+  --input-h: 40px;
+  --transition: 120ms ease;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+
+  --grid-size: 40px;
+  --grid-line: rgba(255, 255, 255, 0.045);
+}
+
+/* ---- light theme (Appearance → Theme) ---- */
+html[data-theme="light"] {
+  --bg-app:      #f6f6f6;
+  --bg-surface:  #ffffff;
+  --bg-raised:   #ffffff;
+  --bg-overlay:  #f0f0f0;
+  --bg-active:   #e7e7e7;
+  --bg-sunken:   #f1f1f1;
+
+  --line-1:      #dcdcdc;
+  --line-2:      #d0d0d0;
+  --line-strong: #888888;
+  --line-faint:  #e6e6e6;
+
+  --text-1:      #111111;
+  --text-2:      #555555;
+  --text-3:      #757575;
+  --text-4:      #aaaaaa;
+
+  --white:       #111111;   /* emphasis: dark on light */
+  --black:       #ffffff;
+
+  --ok-fill:     #111111;
+  --ok-text:     #ffffff;
+  --fail-border: #888888;
+
+  --grid-line: rgba(0, 0, 0, 0.06);
+}
+
+/* ============================================================
+   Base / Reset
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-1);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+#app { height: 100vh; height: 100dvh; }
+
+button { font-family: inherit; font-size: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; background: none; border: none; outline: none; }
+a { color: var(--text-1); text-decoration: none; }
+
+::selection { background: var(--text-1); color: var(--bg-app); }
+
+/* scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--line-strong); border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================
+   Utilities
+   ============================================================ */
+
+.mono { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.01em; }
+.headline { font-family: var(--font-headline); letter-spacing: -0.01em; }
+.hidden { display: none !important; }
+.muted { color: var(--text-3); }
+.nowrap { white-space: nowrap; }
+
+.hairline-b { border-bottom: 1px solid var(--line-1); }
+.hairline-t { border-top: 1px solid var(--line-1); }

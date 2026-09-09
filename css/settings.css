@@ -1,0 +1,87 @@
+/* ============================================================
+   JIGSAW — Settings
+   ============================================================ */
+
+.view-settings { height: 100%; display: flex; flex-direction: column; background: var(--bg-app); }
+
+.settings-body { flex: 1; display: flex; min-height: 0; }
+
+.settings-nav {
+  width: 220px; flex: none;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--line-1);
+  padding: var(--sp-3) 0;
+  display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto;
+}
+.settings-nav-item {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  color: var(--text-2); font-size: 13px; text-align: left;
+  border-left: 2px solid transparent;
+  transition: background var(--transition), color var(--transition);
+}
+.settings-nav-item .icon { color: var(--text-3); }
+.settings-nav-item:hover { background: var(--bg-overlay); color: var(--text-1); }
+.settings-nav-item.active { background: var(--bg-active); color: var(--text-1); border-left-color: var(--white); }
+.settings-nav-item.active .icon { color: var(--text-1); }
+
+.settings-content { flex: 1; overflow-y: auto; padding: var(--sp-8) var(--sp-8); }
+.settings-inner { max-width: 620px; display: flex; flex-direction: column; gap: var(--sp-8); }
+
+.settings-section-title { font-family: var(--font-headline); font-size: 16px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: var(--sp-4); }
+.settings-section-sub { font-size: 12px; color: var(--text-3); margin-top: -var(--sp-3); margin-bottom: var(--sp-4); }
+
+.settings-card {
+  border: 1px solid var(--line-1); background: var(--bg-surface);
+}
+.settings-card + .settings-card { border-top: none; }
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--line-faint);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-row .sr-label { font-size: 13px; color: var(--text-1); }
+.setting-row .sr-desc { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.setting-row .sr-control { flex: none; display: flex; align-items: center; gap: var(--sp-2); }
+.setting-row .sr-control .input, .setting-row .sr-control .select { width: auto; min-width: 180px; height: 32px; font-size: 12px; }
+
+/* slider */
+input[type="range"] {
+  appearance: none; -webkit-appearance: none;
+  width: 160px; height: 2px; background: var(--line-2); outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none;
+  width: 12px; height: 12px; background: var(--white); border: none; border-radius: 0;
+  cursor: pointer;
+}
+html[data-theme="light"] input[type="range"]::-webkit-slider-thumb { background: #111; }
+.range-val { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); min-width: 34px; text-align: right; }
+
+.about-block { display: flex; flex-direction: column; gap: var(--sp-4); }
+.about-logo { display: flex; align-items: center; gap: var(--sp-4); }
+.about-version { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); }
+.about-links { display: flex; flex-direction: column; gap: var(--sp-1); }
+.about-links .link { display: flex; align-items: center; gap: var(--sp-2); font-size: 13px; color: var(--text-2); padding: var(--sp-2) 0; }
+.about-links .link:hover { color: var(--text-1); }
+.about-links .link .icon { color: var(--text-3); }
+
+/* 自定义模型（OpenAI 兼容） */
+.cm-form { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); padding: var(--sp-4); }
+.cm-form .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cm-form .field.full { grid-column: 1 / -1; }
+.cm-form label { font-family: var(--font-mono); font-size: 10px; letter-spacing: .04em; color: var(--text-3); }
+.cm-form .input { width: 100%; height: 32px; font-size: 12px; }
+.cm-form .btn { align-self: flex-start; }
+.cm-empty { padding: var(--sp-4); font-size: 12px; color: var(--text-3); }
+.custom-model-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--line-faint);
+}
+.custom-model-row:last-child { border-bottom: none; }
+.cm-info { min-width: 0; }
+.cm-name { font-size: 13px; color: var(--text-1); }
+.cm-meta { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-actions { display: flex; align-items: center; gap: 2px; flex: none; }

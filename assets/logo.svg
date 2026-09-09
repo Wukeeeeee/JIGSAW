@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- JIGSAW mark: 2x2 grid of squares, 2px gap, diagonal emphasis.
+       Matches the in-app .jigsaw-mark (cells 1&4 primary, 2&3 muted). -->
+  <rect x="0"  y="0"  width="30" height="30" fill="#0a0a0a"/>
+  <rect x="34" y="0"  width="30" height="30" fill="#6d6d6d"/>
+  <rect x="0"  y="34" width="30" height="30" fill="#6d6d6d"/>
+  <rect x="34" y="34" width="30" height="30" fill="#0a0a0a"/>
+</svg>

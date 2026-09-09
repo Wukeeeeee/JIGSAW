@@ -1,0 +1,24 @@
+# 密钥与本地数据（含 API Key，切勿上传）
+backend/data/models.json
+backend/data/*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / Electron
+desktop/node_modules/
+desktop/dist/
+desktop/out/
+
+# 测试截图与临时文件
+_tmp_*.png
+_tmp_*.jpg
+shots/
+_backup/
+
+# 系统文件
+.DS_Store
+Thumbs.db

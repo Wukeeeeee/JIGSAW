@@ -1,0 +1,13 @@
+{
+  "name": "jigsaw-desktop",
+  "version": "0.1.0",
+  "description": "JIGSAW — AI Chat + Agent Workflow (desktop shell)",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

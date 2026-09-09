@@ -1,0 +1,82 @@
+/* ============================================================
+   JIGSAW — Home (Welcome / empty state)
+   ============================================================ */
+
+.view-home {
+  height: 100%;
+  display: flex; flex-direction: column;
+  position: relative;
+}
+
+.home-top {
+  height: var(--header-h); flex: none;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--line-faint);
+}
+
+.home-brand-line {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-family: var(--font-headline); font-size: 13px; font-weight: 600; letter-spacing: .14em;
+  color: var(--text-2);
+}
+.home-brand-line .jigsaw-mark { width: 18px; height: 18px; }
+
+.home-center {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--sp-5);
+  padding: 0 var(--sp-6);
+  min-height: 0;
+}
+
+/* mark: 2x2 grid of squares (monochrome) */
+.jigsaw-mark {
+  display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px;
+  width: 34px; height: 34px;
+}
+.jigsaw-mark .cell { background: var(--text-1); }
+.jigsaw-mark .cell:nth-child(2) { background: var(--text-3); }
+.jigsaw-mark .cell:nth-child(3) { background: var(--text-3); }
+.jigsaw-mark .cell:nth-child(4) { background: var(--text-1); }
+
+.home-wordmark {
+  font-family: var(--font-headline);
+  font-size: 30px; font-weight: 700; letter-spacing: .34em;
+  color: var(--text-1);
+  text-indent: .34em; /* optical centering */
+}
+.home-tagline {
+  font-size: 13px; color: var(--text-3); letter-spacing: .02em;
+  display: flex; align-items: center; gap: var(--sp-3);
+}
+.home-tagline .seg { width: 24px; height: 1px; background: var(--line-2); }
+
+/* big input */
+.home-input-wrap { width: 100%; max-width: 680px; display: flex; flex-direction: column; gap: var(--sp-2); }
+.home-input {
+  display: flex; align-items: flex-end; gap: var(--sp-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: var(--sp-3);
+  transition: border-color var(--transition);
+}
+.home-input:focus-within { border-color: var(--line-strong); }
+.home-input textarea {
+  flex: 1; min-height: 24px; max-height: 180px;
+  background: transparent; color: var(--text-1);
+  font-size: 15px; line-height: 24px; resize: none; padding: 5px 0;
+}
+.home-input textarea::placeholder { color: var(--text-3); }
+.home-input-actions { display: flex; align-items: center; gap: 4px; }
+
+.home-examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: center; max-width: 760px; }
+
+.home-foot {
+  flex: none; height: 44px;
+  display: flex; align-items: center; justify-content: center; gap: var(--sp-4);
+  border-top: 1px solid var(--line-faint);
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em;
+  color: var(--text-4); text-transform: uppercase;
+}
