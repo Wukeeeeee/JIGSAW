@@ -81,20 +81,13 @@
   color: var(--text-4); text-transform: uppercase;
 }
 
-/* 后端连接状态指示：黑白灰，白块=已连接，灰块=未连接 */
+/* 后端连接状态指示：输入框内、模型选择器前的小方块（黑白灰）
+   白块=已连接，灰块=未连接；悬停提示具体状态 */
 .home-status {
-  display: flex; align-items: center; justify-content: center;
-  gap: var(--sp-2);
-  margin-top: var(--sp-6);
-  font-size: 12px; letter-spacing: .02em;
-  color: var(--text-3);
-  user-select: none;
-}
-.home-status .dot {
   width: 8px; height: 8px; flex: none;
   border: 1px solid var(--text-4);
   background: transparent;
+  cursor: default;
 }
-.home-status[data-status="on"] { color: var(--text-2); }
-.home-status[data-status="on"] .dot { background: var(--text-1); border-color: var(--text-1); }
-.home-status[data-status="off"] .dot { border-color: var(--text-3); }
+.home-status[data-status="on"] { background: var(--text-1); border-color: var(--text-1); }
+.home-status[data-status="off"] { border-color: var(--text-3); }

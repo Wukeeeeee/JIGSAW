@@ -8,10 +8,10 @@
   let ta = null;
   let statusTimer = null;
 
-  /* 后端连接状态指示（首页底部）：黑白灰，白=已连接，灰=未连接 */
+  /* 后端连接状态指示（输入框内、模型选择器前的小方块）：白=已连接，灰=未连接 */
   function setStatus(mode, label, statusLine) {
     statusLine.dataset.status = mode;
-    el(".label", statusLine).textContent = label;
+    statusLine.title = label;
   }
   function pingBackend(statusLine) {
     if (!statusLine.isConnected) {            // 已离开首页 → 停止轮询
@@ -70,15 +70,11 @@
             h("div", { class: "home-input" },
               h("textarea", { rows: "1", placeholder: "给 JIGSAW 发消息…", "data-input": "1"}),
               h("div", { class: "home-input-actions" },
+                h("span", { class: "home-status", "data-status": "checking", title: "正在检查后端连接…" }),
                 renderModelSelect(),
                 h("button", { class: "send-btn", "data-send": "1", title: "发送" }, Icons.icon("arrowUp", 16))
               )
             )
-          ),
-
-          h("div", { class: "home-status", "data-status": "checking" },
-            h("span", { class: "dot" }),
-            h("span", { class: "label" }, "正在检查后端连接…")
           )
         )
       );
