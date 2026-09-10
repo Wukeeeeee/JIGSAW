@@ -6,6 +6,22 @@
   const Store = JIGSAW.Store;
 
   let ta = null;
+  let statusTimer = null;
+
+  /* 后端连接状态指示（首页底部）：黑白灰，白=已连接，灰=未连接 */
+  function setStatus(mode, label, statusLine) {
+    statusLine.dataset.status = mode;
+    el(".label", statusLine).textContent = label;
+  }
+  function pingBackend(statusLine) {
+    if (!statusLine.isConnected) {            // 已离开首页 → 停止轮询
+      if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+      return;
+    }
+    JIGSAW.Http.health()
+      .then(() => setStatus("on", "后端已连接", statusLine))
+      .catch(() => setStatus("off", "后端未连接", statusLine));
+  }
 
   function submit(text) {
     text = (text || "").trim();
@@ -58,6 +74,11 @@
                 h("button", { class: "send-btn", "data-send": "1", title: "发送" }, Icons.icon("arrowUp", 16))
               )
             )
+          ),
+
+          h("div", { class: "home-status", "data-status": "checking" },
+            h("span", { class: "dot" }),
+            h("span", { class: "label" }, "正在检查后端连接…")
           )
         )
       );
@@ -79,11 +100,19 @@
       el("[data-history]", view).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
       el("[data-settings]", view).addEventListener("click", () => JIGSAW.Router.navigate("/settings"));
 
+      // 后端连接状态：立即检查 + 每 20s 轮询
+      const statusLine = el(".home-status", view);
+      if (statusTimer) clearInterval(statusTimer);
+      pingBackend(statusLine);
+      statusTimer = setInterval(() => pingBackend(statusLine), 20000);
+
       // 聚焦输入框
       setTimeout(() => ta.focus(), 50);
     },
 
-    unmount() { /* 无持久内容 */ }
+    unmount() {
+      if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+    }
   };
 
   JIGSAW.Views = JIGSAW.Views || {};
