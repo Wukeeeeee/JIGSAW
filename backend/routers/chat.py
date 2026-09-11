@@ -1,9 +1,9 @@
-"""Chat 路由：发送消息 → 获取回复（Mock 实现）。"""
+"""Chat 路由：发送消息 → 异步任务（创建 → 后台处理 → 前端轮询）。"""
 from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services import chat_service
+from services import chat_service, task_service
 from services.store import store
 
 router = APIRouter()
@@ -15,19 +15,15 @@ class ChatRequest(BaseModel):
     # 前端设置 → 模型 里选的自定义模型信息（可选，没有就用后端默认）
     # 结构：{"model": "gpt-4o", "baseUrl": "https://api.openai.com/v1", "apiKey": "sk-..."}
     model: Optional[dict] = None
+    # 前端 设置 → 模型 → 采样温度（可选，没有就用后端默认 0.9）
+    temperature: Optional[float] = None
 
 
-class ChatResponse(BaseModel):
-    conversation_id: str
-    reply: str
-
-
-@router.post("/messages", response_model=ChatResponse)
-def send_message(req: ChatRequest) -> ChatResponse:
+@router.post("/messages")
+def send_message(req: ChatRequest):
     """
-    前端把文字"寄"到这里。
-    req.message         —— 前端输入框里的那句话
-    req.conversation_id —— 哪个会话
+    前端把文字"寄"到这里，立刻返回 task_id（不等待 LLM 处理）。
+    处理在后台任务队列进行，前端用 GET /api/chat/tasks/{task_id} 轮询。
     """
     # 找到这个会话（没有就自动建一个）
     conv = store.get_conversation(req.conversation_id)
@@ -36,20 +32,38 @@ def send_message(req: ChatRequest) -> ChatResponse:
         conv = {"id": req.conversation_id, "title": req.message[:48],
                 "createdAt": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
                 "messages": [], "modelId": "jigsaw-ultra", "workflowExecuted": False}
+        # 保存到本地
         store.conversations.append(conv)
+        store.save_conversations()
 
-    # ① 把用户消息记进会话记录
+    # ① 把用户消息记进会话记录（立即落库，AI 回复由后台任务完成后落库）
     store.add_message(req.conversation_id, chat_service.register_message(req.conversation_id, "user", req.message))
+    store.save_conversations()
 
-    # ② 取这个会话的完整历史（含刚存的这句），交给 chat_service 生成回复
-    #    chat_service.reply() 里调用 _call_llm()（你的替换点）
-    history = store.get_messages(req.conversation_id)
-    # req.model 就是前端设置 → 模型 里选的那个模型（模型名/接口地址/密钥）
-    reply = chat_service.reply(req.conversation_id, req.message, req.model)
+    # ② 创建异步任务，立即返回 task_id；后台 Worker 会调用 chat_service.reply()
+    task = task_service.create_task(req.conversation_id, req.message, req.model, req.temperature)
+    return {
+        "task_id": task["task_id"],
+        "conversation_id": req.conversation_id,
+        "queue_position": task["queue_position"],
+    }
 
-    # ③ 把 AI 回复也记进会话记录
-    store.add_message(req.conversation_id, chat_service.register_message(req.conversation_id, "assistant", reply))
-    return ChatResponse(conversation_id=req.conversation_id, reply=reply)
+
+@router.get("/tasks/{task_id}")
+def get_task(task_id: str):
+    """前端轮询：排队中 / 处理中（含实时工具调用进度）/ 完成（含回复）。"""
+    task = task_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在（后端可能重启过）")
+    return task
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str):
+    """删除一个会话（历史记录）。前端删除时同步调用，否则重启后又会拉回来。"""
+    existed = store.get_conversation(conversation_id) is not None
+    store.delete_conversation(conversation_id)
+    return {"ok": True, "deleted": existed, "conversation_id": conversation_id}
 
 
 @router.get("/conversations/{conversation_id}/messages")

@@ -27,12 +27,20 @@
     return out;
   }
 
+  /** 把外观相关设置应用到页面：主题 / 字号 / 密度 */
+  function applyAppearance(s) {
+    const d = document.documentElement;
+    d.dataset.theme = s.appearance.theme === "light" ? "light" : "dark";
+    d.dataset.fontSize = s.appearance.fontSize || "medium";
+    d.dataset.density = s.general.density || "comfortable";
+  }
+
   const SettingsService = {
     /** hydrate store; returns settings object */
     load() {
       const settings = loadRaw();
       JIGSAW.Store.set({ settings });
-      document.documentElement.dataset.theme = settings.appearance.theme === "light" ? "light" : "dark";
+      applyAppearance(settings);
       return settings;
     },
 
@@ -44,9 +52,7 @@
       const next = deepMerge(st.settings, { [section]: patch });
       st.settings = next;
       JIGSAW.Store.notify("settings");
-      if (section === "appearance" && patch.theme) {
-        document.documentElement.dataset.theme = patch.theme === "light" ? "light" : "dark";
-      }
+      applyAppearance(next);
       try { localStorage.setItem(KEY, JSON.stringify(next)); } catch (e) { /* storage unavailable */ }
     },
 
@@ -54,6 +60,7 @@
       const s = structuredClone(SETTINGS);
       JIGSAW.Store.get().settings = s;
       JIGSAW.Store.notify("settings");
+      applyAppearance(s);
       try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* noop */ }
     }
   };

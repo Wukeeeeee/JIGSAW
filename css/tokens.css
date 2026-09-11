@@ -66,6 +66,20 @@
   --grid-line: rgba(255, 255, 255, 0.045);
 }
 
+/* ---- density (General → 密度)：覆盖 8px 间距体系 ---- */
+html[data-density="compact"] {
+  --sp-1: 2px;  --sp-2: 4px;  --sp-3: 8px;   --sp-4: 12px;
+  --sp-5: 16px; --sp-6: 20px; --sp-8: 28px;  --sp-10: 36px; --sp-12: 44px;
+}
+html[data-density="comfortable"] {
+  --sp-1: 6px;  --sp-2: 12px; --sp-3: 16px;  --sp-4: 20px;
+  --sp-5: 26px; --sp-6: 32px; --sp-8: 40px;  --sp-10: 48px; --sp-12: 56px;
+}
+
+/* ---- font size (Appearance → 字号)：根字号影响全部继承文字 ---- */
+html[data-font-size="small"] { font-size: 13px; }
+html[data-font-size="large"] { font-size: 15px; }
+
 /* ---- light theme (Appearance → Theme) ---- */
 html[data-theme="light"] {
   --bg-app:      #f6f6f6;

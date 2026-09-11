@@ -1,0 +1,29 @@
+/* ============================================================
+   JIGSAW — 工具广场
+   直角、黑白灰、1px 细线。与全局设计语言一致。
+   ============================================================ */
+.view-tools { height: 100%; display: flex; flex-direction: column; background: var(--bg-app); }
+
+.tools-top { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line-1); flex: none; }
+.tools-title { font-family: var(--font-headline); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.tools-top-spacer { flex: 1; }
+
+.tools-body { flex: 1; overflow-y: auto; padding: var(--sp-6) var(--sp-8); }
+.tools-sub { font-size: 12px; color: var(--text-3); margin-bottom: var(--sp-5); }
+.tools-list { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 640px; }
+
+/* 总开关行（工具列表最上面） */
+.tool-master { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); max-width: 640px; padding: var(--sp-4); border: 1px solid var(--line-1); background: var(--bg-surface); margin-bottom: var(--sp-3); }
+.tool-master.off .tm-label { color: var(--text-3); }
+.tm-label { font-size: 13px; color: var(--text-1); }
+.tm-desc { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+
+.tool-card { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--line-1); background: var(--bg-surface); }
+.tool-card:hover { background: var(--bg-overlay); }
+.tool-icon { flex: none; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 1px solid var(--line-1); color: var(--text-2); }
+.tool-info { flex: 1; min-width: 0; }
+.tool-name { font-size: 13px; color: var(--text-1); }
+.tool-desc { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.5; }
+.tool-params { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); margin-top: 4px; }
+
+.tools-empty { padding: var(--sp-6) 0; font-size: 12px; color: var(--text-3); }

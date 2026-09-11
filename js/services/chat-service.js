@@ -25,6 +25,27 @@
 
     get(id) { return Store.get().conversations.find(c => c.id === id) || null; },
 
+    /**
+     * loadRemote() → 启动时从后端拉会话列表，填进前端 store
+     * 这样刷新页面后，历史记录显示的是后端文件里持久化的会话。
+     */
+    async loadRemote() {
+      if (!JIGSAW.Http.isRemote()) return;          // 本地 mock 模式不用拉
+      try {
+        const data = await JIGSAW.Http.listConversations();
+        const remote = data.conversations || [];
+        if (!remote.length) return;
+        const st = Store.get();
+        remote.forEach(rc => {                       // 后端数据覆盖前端（id 相同就更新）
+          const i = st.conversations.findIndex(l => l.id === rc.id);
+          if (i >= 0) st.conversations[i] = rc; else st.conversations.push(rc);
+        });
+        Store.notify("conversations");
+      } catch (e) {
+        console.warn("拉取会话列表失败", e);          // 后端没起不影响本地 mock 使用
+      }
+    },
+
     create({ title, text, modelId }) {
       const convId = uid("c");
       const template = detectTemplate(text);
@@ -51,6 +72,12 @@
       if (st.activeConversationId === id) st.activeConversationId = null;
       Store.notify("conversations");
       Store.notify("workflows");
+      // 远程模式下同步通知后端删除，否则重启应用后端又把会话拉回来
+      if (JIGSAW.Http.isRemote()) {
+        JIGSAW.Http.deleteConversation(id).catch(err => {
+          JIGSAW.Toast && JIGSAW.Toast.show("删除失败：" + err.message);
+        });
+      }
     },
 
     rename(id, title) {
@@ -152,22 +179,47 @@
 
       // ② 决定回复从哪来
       if (JIGSAW.Http.isRemote()) {
-        // ===== 数据源 = 后端 API =====
-        // Http.chat(convId, text) 会做这样一件事（信使）：
-        //   fetch("http://127.0.0.1:8000/api/chat/messages", {
-        //     method: "POST",
-        //     body: JSON.stringify({ conversation_id: convId, message: text })
-        //   })
-        // 也就是把你输入的文字打包成 JSON，寄给 FastAPI 后端。
-        // 后端算好回复后返回 { reply: "..." }，这里拿到的是 res.reply。
+        // ===== 数据源 = 后端 API（异步任务） =====
+        // Http.chat() 只把消息寄给后端并拿到 task_id（毫秒级返回）
+        // 然后每 2 秒轮询任务状态，实时显示：排队中 → 正在调用 XX 工具 → 完成
+        const fail = (msg) => {
+          asstMsg.status = "done";
+          asstMsg.text = asstMsg.full = msg;
+          Store.notify("messages");
+          done(asstMsg);
+        };
         JIGSAW.Http.chat(convId, text, model)
-          .then(res => stream(res.reply || "（后端未返回内容）"))
+          .then(res => {
+            const taskId = res.task_id;
+            if (!taskId) { fail("后端未返回任务编号：" + (res.message || "")); return; }
+            const poll = setInterval(() => {
+              JIGSAW.Http.getTask(taskId).then(t => {
+                if (!t) { clearInterval(poll); fail("任务不存在（后端可能重启过）"); return; }
+                if (t.status === "done") {
+                  clearInterval(poll);
+                  asstMsg.toolsUsed = t.toolsUsed || [];   // 这轮用过的工具名，气泡展示
+                  stream(t.reply || "（后端未返回内容）");
+                } else if (t.status === "failed") {
+                  clearInterval(poll);
+                  fail("任务失败：" + (t.error || "未知错误"));
+                } else {
+                  // ★ 实时状态：排队中（第 N 位）/ 正在调用 XX 工具 / 思考中
+                  asstMsg.status = "streaming";
+                  const pos = (t.status === "pending" && t.queue_position > 0)
+                    ? `（第 ${t.queue_position} 位）` : "";
+                  asstMsg.text = t.status === "pending"
+                    ? `排队中${pos}…`
+                    : (t.activity || "思考中…");
+                  Store.notify("messages");
+                }
+              }).catch(err => {
+                clearInterval(poll);
+                fail("请求任务状态失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）");
+              });
+            }, 2000);
+          })
           .catch(err => {
-            // 后端连不上 / 报错时，显示错误提示，不崩溃
-            asstMsg.status = "done";
-            asstMsg.text = asstMsg.full = "请求后端失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）";
-            Store.notify("messages");
-            done(asstMsg);
+            fail("请求后端失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）");
           });
       } else {
         // ===== 数据源 = 本地 Mock =====

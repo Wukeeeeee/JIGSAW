@@ -26,6 +26,19 @@
     if (force || nearBottom) scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
+  /** 工具标签行：AI 这轮用过哪些工具（图标 + 名称） */
+  function buildToolsRow(toolsUsed) {
+    return h("div", { class: "msg-tools" },
+      (toolsUsed || []).map(name => {
+        const meta = JIGSAW.ToolService.getMeta(name);
+        return h("span", { class: "msg-tool-tag" },
+          Icons.icon((meta && meta.icon) || "tool", 11),
+          h("span", null, (meta && meta.label) || name)
+        );
+      })
+    );
+  }
+
   function messageEl(msg, conv) {
     const isUser = msg.role === "user";
     const model = JIGSAW.ModelService.get(msg.modelId);
@@ -34,9 +47,10 @@
       h("div", { class: "msg-content" },
         h("div", { class: "msg-meta" },
           h("span", { class: "who" }, isUser ? "你" : "JIGSAW"),
-          h("span", { class: "time" }, timeLabel(msg.createdAt)),
+          JIGSAW.Store.get().settings.appearance.showTimestamps ? h("span", { class: "time" }, timeLabel(msg.createdAt)) : null,
           h("span", { class: "model-tag" }, model ? model.name : "")
         ),
+        isUser || !(msg.toolsUsed && msg.toolsUsed.length) ? null : buildToolsRow(msg.toolsUsed),
         h("div", { class: "msg-bubble" }, msg.text ? Markdown.render(msg.text) : (msg.status === "streaming" ? "" : "")),
         h("div", { class: "msg-actions" },
           h("button", { class: "icon-btn icon-btn-sm", "data-act": "copy", title: "复制" }, Icons.icon("copy", 13)),
@@ -88,6 +102,11 @@
         bubble.innerHTML = msg.text ? Markdown.render(msg.text) : "";
         if (isStream) bubble.appendChild(h("span", { class: "caret" }));
         node.classList.toggle("msg-sending", isStream);
+        // tools tag：流式开始时 toolsUsed 才就位，此时补上标签行
+        const hasTools = msg.toolsUsed && msg.toolsUsed.length;
+        let tagRow = el(".msg-tools", node);
+        if (hasTools && !tagRow) { bubble.before(buildToolsRow(msg.toolsUsed)); }
+        else if (!hasTools && tagRow) { tagRow.remove(); }
         // model tag update
         const tag = el(".model-tag", node);
         if (tag) tag.textContent = (JIGSAW.ModelService.get(msg.modelId) || {}).name || "";
@@ -111,11 +130,13 @@
       h("div", { class: "topbar-spacer" }),
       h("div", { class: "topbar", style: { border: "none", padding: "0" } },
         h("button", { class: "btn btn-sm", "data-wf": "1" }, Icons.icon("branch", 13), "工作流"),
+        h("button", { class: "btn btn-sm", "data-tools": "1" }, Icons.icon("tool", 13), "工具"),
         h("button", { class: "icon-btn", "data-settings": "1", title: "设置" }, Icons.icon("sliders"))
       )
     );
     el("[data-history]", header).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
     el("[data-wf]", header).addEventListener("click", () => JIGSAW.Router.navigate("/chat/" + convId + "/workflow"));
+    el("[data-tools]", header).addEventListener("click", () => JIGSAW.Router.navigate("/tools"));
     el("[data-settings]", header).addEventListener("click", () => JIGSAW.Router.navigate("/settings"));
   }
 
@@ -198,6 +219,11 @@
     mount(root, params) {
       container = root;
       convId = params.id;
+      // 工具缓存可能因后端当时未启动而为空（气泡工具标签退化成英文名+扳手图标）
+      // → 每次进入聊天页静默补拉一次，让图标和中文名自愈
+      if (JIGSAW.Http.isRemote() && JIGSAW.ToolService.list().length === 0) {
+        JIGSAW.ToolService.load();
+      }
       const conv = JIGSAW.ChatService.get(convId);
       if (!conv) { JIGSAW.Router.navigate("/"); return; }
       Store.set({ activeConversationId: convId });

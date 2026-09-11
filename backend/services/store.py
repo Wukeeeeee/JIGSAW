@@ -8,12 +8,18 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-# 自定义模型的持久化文件：写盘保存，重启后端 / 清浏览器缓存都不丢
+# 文件写锁：异步任务 worker 与请求线程可能同时写 conversations.json，
+# 用同一把锁串行化写盘，避免文件损坏。
+_file_lock = threading.Lock()
+
+#用户自定义的模型
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 MODELS_FILE = os.path.join(DATA_DIR, "models.json")
+CONVERSATIONS_FILE = os.path.join(DATA_DIR, "conversations.json")
 
 
 def _load_models() -> List[Dict[str, Any]]:
@@ -30,6 +36,25 @@ def _save_models(models: List[Dict[str, Any]]) -> None:
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(MODELS_FILE, "w", encoding="utf-8") as f:
             json.dump(models, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+#读写对话记录
+def _load_conversations() -> List[Dict[str, Any]]:
+    try:
+        with open(CONVERSATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # 仅当文件内容是列表时才返回，否则返回空列表
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+#保存对话记录
+def _save_conversations(convs: List[Dict[str, Any]]) -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(CONVERSATIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(convs, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
@@ -68,13 +93,13 @@ class Store:
     """进程内 Mock 存储。替换真实后端时，把读写改为数据库即可。"""
 
     def __init__(self) -> None:
-        self.conversations: List[Dict[str, Any]] = list(SEED_CONVERSATIONS)
+        self.conversations=_load_conversations()
         self.workflows: Dict[str, Dict[str, Any]] = {k: _deep(v) for k, v in SEED_WORKFLOWS.items()}
         # 自定义模型：从文件读入（文件不存在则空）
         self.custom_models: List[Dict[str, Any]] = _load_models()
         self.settings: Dict[str, Any] = {
-            "api": {"provider": "jigsaw-cloud", "baseUrl": "http://127.0.0.1:8000",
-                    "apiKey": "", "proxyEnabled": False, "connected": False, "mode": "remote"},
+            "api": {"provider": "openai", "baseUrl": "http://127.0.0.1:8000",
+                    "connected": False, "mode": "remote"},
             "model": {"defaultModel": "jigsaw-ultra", "visionEnabled": True,
                       "toolsEnabled": True, "temperature": 0.7},
             "workflow": {"defaultTemplate": "default", "executionSpeed": "normal",
@@ -92,6 +117,15 @@ class Store:
 
     def list_conversations(self) -> List[Dict[str, Any]]:
         return sorted(self.conversations, key=lambda c: c.get("createdAt", ""), reverse=True)
+
+    def save_conversations(self) -> None:
+        """把当前会话列表写盘，调用点在 chat.py 的新建/发消息之后。"""
+        with _file_lock:
+            _save_conversations(self.conversations)
+
+    def delete_conversation(self, conv_id: str) -> None:
+        self.conversations = [c for c in self.conversations if c["id"] != conv_id]
+        self.save_conversations()
 
     # ---- workflows ----
     def get_workflow(self, wf_id: str) -> Dict[str, Any] | None:

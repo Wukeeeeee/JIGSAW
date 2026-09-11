@@ -106,3 +106,8 @@
 .send-btn:hover { background: #e2e2e2; }
 html[data-theme="light"] .send-btn:hover { background: #333; color: #fff; }
 .send-btn:disabled { background: var(--line-2); color: var(--text-3); cursor: not-allowed; }
+
+/* ---- 气泡内工具标签条（AI 这轮用过的工具） ---- */
+.msg-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.msg-tool-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line-1); background: var(--bg-surface); font-size: 10px; color: var(--text-2); }
+.msg-tool-tag .icon { color: var(--text-3); }

@@ -21,6 +21,7 @@
   color: var(--text-2);
 }
 .home-brand-line .jigsaw-mark { width: 18px; height: 18px; }
+.home-top-right { display: flex; align-items: center; gap: var(--sp-1); }
 
 .home-center {
   flex: 1;

@@ -47,6 +47,9 @@
 
     // 从后端拉回模型配置（持久化：清浏览器缓存也不丢模型）
     JIGSAW.ModelService.syncFromServer();
+
+    // 从后端拉回会话列表（持久化：刷新页面后历史记录还在）
+    JIGSAW.ChatService.loadRemote();
   }
 
   /* ---------- boot ---------- */
@@ -99,6 +102,11 @@
     JIGSAW.Router.register("#/settings", (container, params) => {
       currentView = JIGSAW.Views.Settings;
       JIGSAW.Views.Settings.mount(container, params);
+    });
+
+    JIGSAW.Router.register("#/tools", (container, params) => {
+      currentView = JIGSAW.Views.Tools;
+      JIGSAW.Views.Tools.mount(container, params);
     });
 
     JIGSAW.Router.render();

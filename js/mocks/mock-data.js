@@ -139,7 +139,7 @@
     general: { workspaceName: "JIGSAW", language: "system", density: "comfortable" },
     appearance: { theme: "dark", fontSize: "medium", showTimestamps: true, showHomeTagline: false },
     model: { defaultModel: "jigsaw-ultra", visionEnabled: true, toolsEnabled: true, temperature: 0.7, custom: [] },
-    api: { provider: "jigsaw-cloud", baseUrl: "http://127.0.0.1:8000", apiKey: "", proxyEnabled: false, connected: false, mode: "mock" },
+    api: { provider: "openai", baseUrl: "http://127.0.0.1:8000", connected: false, mode: "mock" },
     workflow: { defaultTemplate: "default", executionSpeed: "normal", autoRun: false, gridSize: 40 },
     about: { version: "0.1.0", build: "本地构建" }
   };

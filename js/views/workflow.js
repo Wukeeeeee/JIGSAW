@@ -558,8 +558,23 @@
         if (portIn) {
           const toNode = portIn.closest(".wf-node");
           if (toNode) {
-            const ok = WF.addEdge(wf().id, fromId, toNode.dataset.id);
-            if (ok) JIGSAW.Toast.show("已添加连线");
+            const toId = toNode.dataset.id;
+            const w = wf();
+            const ok = WF.addEdge(w.id, fromId, toId);
+            if (ok) {
+              JIGSAW.Toast.show("已添加连线");
+            } else {
+              // 给明确的失败原因，而不是静默失败
+              if (w.running) {
+                JIGSAW.Toast.show("运行中不可修改画布，请先停止");
+              } else if (!WF.isEditable(w, fromId) || !WF.isEditable(w, toId)) {
+                JIGSAW.Toast.show("节点已锁定，点「重置」解锁后可连线");
+              } else if (w.edges.some(ed => ed.from === fromId && ed.to === toId)) {
+                JIGSAW.Toast.show("该连线已存在");
+              } else {
+                JIGSAW.Toast.show("无法连线：会形成循环依赖");
+              }
+            }
           }
         }
       }
@@ -637,6 +652,9 @@
 
       renderTopbar();
       renderControls();
+
+      // 启动自愈：上次运行中断导致画布锁死时，先解锁再渲染
+      EX.recover(convId);
 
       // initial layout
       heights.clear();

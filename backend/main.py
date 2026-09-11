@@ -12,9 +12,13 @@ services/ 下的实现（chat_service / execution_service / workflow_service）�
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import agents, chat, execution, models, settings, workflows
+from routers import agents, chat, execution, models, settings, tools, workflows
 
 app = FastAPI(title="JIGSAW Backend", version="0.1.0")
+
+# 启动异步任务队列的后台 Worker（幂等）：聊天消息在这里被一条条串行处理
+from services import task_service
+task_service.start_worker()
 
 # 允许本地前端（file:// 或任意本地端口）直接访问
 app.add_middleware(
@@ -30,6 +34,7 @@ app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(workflows.router, prefix="/api/workflows", tags=["workflows"])
 app.include_router(execution.router, prefix="/api/workflows", tags=["execution"])
 app.include_router(settings.router, prefix="/api", tags=["settings"])
+app.include_router(tools.router, prefix="/api", tags=["tools"])
 
 
 @app.get("/api/health")

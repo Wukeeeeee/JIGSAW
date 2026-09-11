@@ -35,6 +35,10 @@
       wf.executed = false;
       Store.notify("workflows");
 
+      // 中断令牌：stop() 置 cancelled=true，循环检测后立即停
+      const token = { cancelled: false };
+      runs.set(wf.id, token);
+
       const speed = Store.get().settings.workflow.executionSpeed;
       const base = speed === "slow" ? 2600 : speed === "fast" ? 800 : 1500;
 
@@ -47,32 +51,53 @@
       });
       wf.nodes.forEach(n => { if (!ordered.includes(n.id)) ordered.push(n.id); });
 
-      for (const nodeId of ordered) {
-        const node = wf.nodes.find(n => n.id === nodeId);
-        if (!node) continue;
-        node.status = "running";
+      try {
+        for (const nodeId of ordered) {
+          if (token.cancelled) break;
+          const node = wf.nodes.find(n => n.id === nodeId);
+          if (!node) continue;
+          node.status = "running";
+          Store.notify("workflows");
+          await delay(base + Math.random() * 500);
+          if (token.cancelled) { node.status = "failed"; break; }
+          node.status = "success";
+          Store.notify("workflows");
+          await delay(120);
+        }
+      } finally {
+        // 无论正常完成还是被 stop，都要释放锁，否则画布永久不可编辑
+        runs.delete(wf.id);
+        wf.running = false;
         Store.notify("workflows");
-        await delay(base + Math.random() * 500);
-        node.status = "success";
-        Store.notify("workflows");
-        await delay(120);
       }
 
-      wf.running = false;
-      wf.executed = true;
-      Store.notify("workflows");
-      if (runs.has(wf.id)) { clearTimeout(runs.get(wf.id)); runs.delete(wf.id); }
+      if (!token.cancelled) {
+        wf.executed = true;
+        Store.notify("workflows");
+      }
     },
 
-    /** soft stop: mark remaining waiting as failed */
+    /** soft stop: mark remaining waiting/running as failed and break the loop */
     stop(convId) {
       const wf = WorkflowService.getForConversation(convId);
-      if (!wf || !wf.running) return;
-      const handle = runs.get(wf.id);
-      if (handle) { clearTimeout(handle); runs.delete(wf.id); }
-      wf.nodes.forEach(n => { if (n.status === "waiting") n.status = "failed"; });
+      if (!wf) return;
+      const token = runs.get(wf.id);
+      if (token) token.cancelled = true;   // 真正的中断信号
+      wf.nodes.forEach(n => { if (n.status === "waiting" || n.status === "running") n.status = "failed"; });
       wf.running = false;
       Store.notify("workflows");
+    },
+
+    /** 启动自愈：页面刷新/切换导致上次运行中断时，解锁卡死的画布 */
+    recover(convId) {
+      const wf = WorkflowService.getForConversation(convId);
+      if (!wf || !wf.running) return;
+      // 本页面没有活动运行，但 wf.running 为 true → 上次运行已经死了，强制解锁
+      if (!runs.has(wf.id)) {
+        wf.running = false;
+        wf.nodes.forEach(n => { if (n.status === "running") n.status = "waiting"; });
+        Store.notify("workflows");
+      }
     }
   };
 

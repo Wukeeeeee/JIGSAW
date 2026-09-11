@@ -56,7 +56,10 @@
             ),
             h("span", null, "JIGSAW")
           ),
-          h("button", { class: "icon-btn", "data-settings": "1", title: "设置" }, Icons.icon("sliders"))
+          h("div", { class: "home-top-right" },
+            h("button", { class: "icon-btn", "data-tools": "1", title: "工具" }, Icons.icon("tool")),
+            h("button", { class: "icon-btn", "data-settings": "1", title: "设置" }, Icons.icon("sliders"))
+          )
         ),
 
         h("div", { class: "home-center" },
@@ -94,6 +97,7 @@
       send.addEventListener("click", () => submit(ta.value));
 
       el("[data-history]", view).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
+      el("[data-tools]", view).addEventListener("click", () => JIGSAW.Router.navigate("/tools"));
       el("[data-settings]", view).addEventListener("click", () => JIGSAW.Router.navigate("/settings"));
 
       // 后端连接状态：立即检查 + 每 20s 轮询

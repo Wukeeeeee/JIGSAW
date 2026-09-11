@@ -16,6 +16,9 @@ desktop/out/
 # 测试截图与临时文件
 _tmp_*.png
 _tmp_*.jpg
+_shot*.png
+_test_*.py
+_uvicorn*.log
 shots/
 _backup/
 

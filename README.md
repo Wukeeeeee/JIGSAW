@@ -8,7 +8,7 @@ JIGSAW 是一款将 AI 对话与可视化多 Agent 工作流融为一体的桌�
 
 **核心体验：Chat → Workflow → Chat**
 
-**当前状态**：前端 UI 原型 + FastAPI 后端骨架。聊天已接通真实 LLM（OpenAI 兼容接口），Agent 执行为 Mock，尚未实现。
+**当前状态**：前端 UI + FastAPI 后端骨架。聊天已接通真实 LLM（OpenAI 兼容接口），支持工具调用（内置工具注册表 + 工具广场 + 对话内工具标签）；会话与模型已本地文件持久化。Agent 执行为 Mock，尚未实现。
 
 ## 系统架构
 
@@ -20,10 +20,12 @@ graph TD
     F -->|POST /api/chat/messages| API[FastAPI]
     API -->|reply| LLM[用户配置的模型]
     LLM -->|回复| API
-    API -->|reply 文本| F
+    API -->|reply 文本 + toolsUsed| F
+    F -->|查看 / 开关| T[工具注册表]
+    T -->|工具说明书| API
     F -->|查看 / 编辑| W[Workflow 画布]
     W -->|模拟执行| EX[ExecutionService]
-    API -->|模型持久化| F1[(models.json)]
+    API -->|持久化| F1[(backend/data/*.json)]
 ```
 
 ## 技术栈
@@ -36,7 +38,7 @@ graph TD
 | 桌面 | Electron                                      |
 | 后端 | Python · FastAPI · Uvicorn                    |
 | AI | langchain-openai（OpenAI 兼容接口）                 |
-| 存储 | 前端 localStorage + 后端内存 + `models.json`（模型持久化） |
+| 存储 | 前端 localStorage + `backend/data/`（会话 / 模型 / 工具开关 JSON 文件持久化） |
 
 ## 项目结构
 
@@ -57,11 +59,11 @@ Figsaw/
 
 │   ├── mocks/            # 种子数据（Agent 模板、工作流模板、设置）
 
-│   ├── services/         # 服务层（Http / Chat / Model / Workflow / Execution / Settings）
+│   ├── services/         # 服务层（Http / Chat / Model / Tool / Workflow / Execution / Settings）
 
 │   ├── ui/               # 自绘组件
 
-│   └── views/            # 首页 / 聊天 / 工作流 / 设置 / 历史
+│   └── views/            # 首页 / 聊天 / 工作流 / 设置 / 工具广场 / 历史
 
 ├── desktop/              # Electron 桌面壳
 
@@ -69,11 +71,13 @@ Figsaw/
 
 │   ├── main.py           # FastAPI 入口
 
-│   ├── routers/          # chat / models / agents / workflows / execution / settings
+│   ├── routers/          # chat / models / tools / agents / workflows / execution / settings
 
 │   ├── services/         # chat\_service(LLM 调用点) 等
 
-│   └── data/models.json  # 模型持久化文件
+│   ├── tools/            # 内置工具注册表（time 等）
+
+│   └── data/             # 会话 / 模型 / 工具开关的 JSON 持久化文件（已 gitignore）
 
 └── backend/run.bat       # 一键启动后端
 ```
@@ -82,9 +86,9 @@ Figsaw/
 
 
 
-* **已完成**：前端界面与交互、后端骨架、聊天真实链路、自定义模型管理 + 持久化
+* **已完成**：前端界面与交互、后端骨架、聊天真实链路、工具调用（注册表 + 工具广场 + 对话内工具标签）、自定义模型管理 + 持久化、会话持久化
 
-* **计划中**：真实 Agent 运行时（替换 `chat_service` / `execution_service`）、会话持久化、工作流状态与聊天联动、记忆
+* **计划中**：真实 Agent 运行时（替换 `chat_service` / `execution_service`）、工作流状态与聊天联动、记忆
 
 ## 运行
 
