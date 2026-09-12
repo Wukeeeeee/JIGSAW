@@ -23,6 +23,34 @@
 .home-brand-line .jigsaw-mark { width: 18px; height: 18px; }
 .home-top-right { display: flex; align-items: center; gap: var(--sp-1); }
 
+/* "项目"按钮（输入框左下角）：直角、1px 细线、黑白灰；开启时反白高亮 */
+.cwd-btn {
+  height: 34px; padding: 0 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--line-strong); border-radius: 0;
+  font-size: 13px; cursor: pointer; white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.cwd-btn:hover { background: var(--bg-2); color: var(--text-1); }
+.cwd-ico { display: inline-flex; align-items: center; color: var(--text-3); }
+.cwd-btn:hover .cwd-ico { color: var(--text-2); }
+/* 开启状态：黑边黑字 + folder 图标指示（不整块涂黑，深浅色主题都协调） */
+.cwd-btn.on {
+  background: transparent;
+  border-color: var(--text-1);
+  color: var(--text-1);
+  font-weight: 600;
+}
+.cwd-btn.on .cwd-ico { color: var(--text-1); }
+/* 退出按钮（×）：开启状态时出现在"项目 · 目录名"右侧 */
+.cwd-x {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 2px; opacity: .6; cursor: pointer;
+}
+.cwd-x:hover { opacity: 1; }
+.cwd-btn.busy { opacity: .5; cursor: wait; }
+
 .home-center {
   flex: 1;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -56,7 +84,7 @@
 /* big input */
 .home-input-wrap { width: 100%; max-width: 680px; display: flex; flex-direction: column; gap: var(--sp-2); }
 .home-input {
-  display: flex; align-items: flex-end; gap: var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-2);
   background: var(--bg-raised);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
@@ -65,12 +93,19 @@
 }
 .home-input:focus-within { border-color: var(--line-strong); }
 .home-input textarea {
-  flex: 1; min-height: 24px; max-height: 180px;
+  min-height: 28px; max-height: 180px;
   background: transparent; color: var(--text-1);
   font-size: 15px; line-height: 24px; resize: none; padding: 5px 0;
+  overflow-y: auto;
 }
 .home-input textarea::placeholder { color: var(--text-3); }
-.home-input-actions { display: flex; align-items: center; gap: 4px; }
+.home-input-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+/* 权限级别下拉（模型选择器左边）：与模型下拉同高 */
+.perm-dd { flex: none; }
+.perm-dd .dd-btn { height: 34px; }
+.home-input-actions-right { display: flex; align-items: center; gap: 4px; }
 
 .home-examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: center; max-width: 760px; }
 
@@ -81,14 +116,3 @@
   font-family: var(--font-mono); font-size: 10px; letter-spacing: .1em;
   color: var(--text-4); text-transform: uppercase;
 }
-
-/* 后端连接状态指示：输入框内、模型选择器前的小方块（黑白灰）
-   白块=已连接，灰块=未连接；悬停提示具体状态 */
-.home-status {
-  width: 8px; height: 8px; flex: none;
-  border: 1px solid var(--text-4);
-  background: transparent;
-  cursor: default;
-}
-.home-status[data-status="on"] { background: var(--text-1); border-color: var(--text-1); }
-.home-status[data-status="off"] { border-color: var(--text-3); }

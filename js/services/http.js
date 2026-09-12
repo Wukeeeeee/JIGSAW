@@ -81,6 +81,27 @@
       return request("/api/chat/tasks/" + encodeURIComponent(taskId), { timeout: 10000 });
     },
 
+    /** POST /api/chat/tasks/{taskId}/answer → 回答 AskUser 的问题，唤醒任务 */
+    answerTask(taskId, answer, noMore) {
+      const body = { answer };
+      if (noMore) body.noMore = true;   // 风险确认弹窗勾了"不再提醒"
+      return request("/api/chat/tasks/" + encodeURIComponent(taskId) + "/answer", {
+        method: "POST", body
+      });
+    },
+
+    /** POST /api/chat/tasks/{taskId}/cancel → 终止任务（排队/处理中都可） */
+    cancelTask(taskId) {
+      return request("/api/chat/tasks/" + encodeURIComponent(taskId) + "/cancel", {
+        method: "POST", body: {}
+      });
+    },
+
+    /** GET /api/chat/tasks → 所有排队中/处理中的任务（队列面板用） */
+    listTasks() {
+      return request("/api/chat/tasks", { method: "GET" }).then(r => (r && r.tasks) || []);
+    },
+
     /** GET /api/health → { status }：测试后端是否活着 */
     health() {
       return request("/api/health", { timeout: 5000 });
@@ -104,6 +125,29 @@
     /** POST /api/tools/enabled → 总开关：允许/不允许 AI 使用任何工具 */
     setToolsEnabled(enabled) {
       return request("/api/tools/enabled", { method: "POST", body: { enabled } });
+    },
+
+    enableAllTools(enabled) {
+      return request("/api/tools/enable-all", { method: "POST", body: { enabled } });
+    },
+
+    setToolsPermission(level) {
+      return request("/api/tools/permission", { method: "POST", body: { level } });
+    },
+
+    /** POST /api/tools/cwd-project → "进入项目工作"开关（shell 命令在自定义工作目录执行） */
+    setCwdProject(enabled) {
+      return request("/api/tools/cwd-project", { method: "POST", body: { enabled } });
+    },
+
+    /** POST /api/tools/cwd-pick → 后端弹系统目录选择框；选中即保存并开启 */
+    pickCwdProject() {
+      return request("/api/tools/cwd-pick", { method: "POST", body: {}, timeout: 300000 });
+    },
+
+    /** POST /api/tools/cwd-path → 手动设置工作目录路径 */
+    setCwdPath(path) {
+      return request("/api/tools/cwd-path", { method: "POST", body: { path }, timeout: 15000 });
     },
 
     /** POST /api/tools/{name}/toggle → 切换工具启用/禁用 */

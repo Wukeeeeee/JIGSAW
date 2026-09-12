@@ -54,7 +54,8 @@
         h("div", { class: "msg-bubble" }, msg.text ? Markdown.render(msg.text) : (msg.status === "streaming" ? "" : "")),
         h("div", { class: "msg-actions" },
           h("button", { class: "icon-btn icon-btn-sm", "data-act": "copy", title: "复制" }, Icons.icon("copy", 13)),
-          isUser ? null : h("button", { class: "icon-btn icon-btn-sm", "data-act": "regenerate", title: "重新生成" }, Icons.icon("refresh", 13))
+          isUser ? null : h("button", { class: "icon-btn icon-btn-sm", "data-act": "regenerate", title: "重新生成" }, Icons.icon("refresh", 13)),
+          (isUser || msg.status !== "streaming") ? null : h("button", { class: "icon-btn icon-btn-sm msg-cancel", "data-act": "cancel", title: "终止此任务" }, Icons.icon("x", 13))
         )
       )
     );
@@ -73,6 +74,8 @@
           navigator.clipboard.writeText(msg.text || msg.full || "").then(() => JIGSAW.Toast.show("已复制到剪贴板"));
         } else if (act === "regenerate") {
           JIGSAW.ChatService.regenerate(convId);
+        } else if (act === "cancel") {
+          JIGSAW.ChatService.cancel();
         }
       });
     });
@@ -110,6 +113,15 @@
         // model tag update
         const tag = el(".model-tag", node);
         if (tag) tag.textContent = (JIGSAW.ModelService.get(msg.modelId) || {}).name || "";
+        // 终止按钮：streaming（排队/思考/等回答）时显示，完成/失败后移除
+        let cancelBtn = el(".msg-cancel", node);
+        if (isStream && !cancelBtn) {
+          const cb = h("button", { class: "icon-btn icon-btn-sm msg-cancel", "data-act": "cancel", title: "终止此任务" }, Icons.icon("x", 13));
+          const actions = el(".msg-actions", node);
+          if (actions) { actions.appendChild(cb); cb.addEventListener("click", () => JIGSAW.ChatService.cancel()); }
+        } else if (!isStream && cancelBtn) {
+          cancelBtn.remove();
+        }
       }
     });
 
@@ -158,16 +170,90 @@
     const ta = h("textarea", { rows: "1", placeholder: "给 JIGSAW 发消息…" });
     const sendBtn = h("button", { class: "send-btn", "data-send": "1", title: "发送" }, Icons.icon("arrowUp", 16));
 
+    // "项目"按钮（同首页）：选目录进入项目工作；点 × 退出
+    const cwdBtn = h("button", { class: "cwd-btn", "data-cwd": "1", title: "选择目录，进入项目工作" }, "项目");
+    // 队列状态徽标（发送按钮旁，data-queue 唯一）：空闲隐藏；回复中显示"正在回复 · +N"
+    const queueEl = h("span", { class: "chat-queue hidden", "data-queue": "1" });
+    const shortPath = p => { const parts = String(p || "").split(/[\\/]+/).filter(Boolean); return parts[parts.length - 1] || ""; };
+    const refreshCwd = () => {
+      const on = JIGSAW.ToolService.isCwdProject();
+      const p = JIGSAW.ToolService.cwdDisplay();
+      cwdBtn.classList.toggle("on", on);
+      cwdBtn.textContent = "";
+      cwdBtn.appendChild(document.createTextNode(on ? "项目 · " + shortPath(p) : "项目"));
+      if (on) {
+        const x = document.createElement("span");
+        x.className = "cwd-x";
+        x.title = "退出项目工作";
+        x.setAttribute("role", "button");
+        x.innerHTML = Icons.icon("x", 11);
+        cwdBtn.appendChild(x);
+      }
+      cwdBtn.title = on ? ("shell 命令在 " + p + " 执行，点 × 退出") : "选择目录，进入项目工作";
+    };
+    // 权限级别选择器（始终询问 / 按需确认 / 全部允许），模型选择器左边
+    const renderPermDD = () => {
+      const slot = el("[data-perm-dd]", view);
+      if (!slot || slot.hasChildNodes()) return;
+      const dd = JIGSAW.Dropdown.create(
+        JIGSAW.ToolService.permissionOptions(),
+        JIGSAW.ToolService.permission(),
+        id => {
+          JIGSAW.ToolService.setPermission(id)
+            .then(r => { if (!r || !r.ok) JIGSAW.Toast.show("权限设置失败"); })
+            .catch(e => JIGSAW.Toast.show("权限设置失败：" + (e.message || "")));
+        },
+        { icon: "shield" }
+      );
+      slot.appendChild(dd);
+    };
+
+    const loadTools = () => {
+      if (JIGSAW.Http.isRemote()) JIGSAW.ToolService.load().then(() => { refreshCwd(); renderPermDD(); });
+      else { refreshCwd(); renderPermDD(); }   // 本地模式也渲染图标与默认权限
+    };
+    loadTools();
+    cwdBtn.addEventListener("click", async (e) => {
+      if (e.target.closest(".cwd-x")) {
+        cwdBtn.classList.toggle("on", false);
+        try { await JIGSAW.ToolService.setCwdProject(false); refreshCwd(); }
+        catch (err) { cwdBtn.classList.toggle("on", true); JIGSAW.Toast.show("退出失败：" + (err.message || "")); }
+        return;
+      }
+      if (cwdBtn.classList.contains("busy")) return;
+      cwdBtn.classList.add("busy");
+      try {
+        const r = await JIGSAW.ToolService.pickCwdProject();
+        if (r && r.ok) { refreshCwd(); JIGSAW.Toast.show("已进入项目工作：" + r.path); }
+        else if (r && r.error) {
+          const path = prompt("后端无法弹出目录选择框，请手动输入工作目录路径：", JIGSAW.ToolService.cwdDisplay());
+          if (path && path.trim()) {
+            const r2 = await JIGSAW.ToolService.setCwdPath(path.trim());
+            if (r2 && r2.ok) { refreshCwd(); JIGSAW.Toast.show("已进入项目工作：" + path.trim()); }
+          }
+        }
+      } catch (err) {
+        JIGSAW.Toast.show("目录选择失败：" + (err.message || ""));
+      } finally {
+        cwdBtn.classList.remove("busy");
+      }
+    });
+
     const box = h("div", { class: "chat-input-box" },
       ta,
-      h("div", { class: "chat-input-actions" }, sel, sendBtn)
+      h("div", { class: "chat-input-actions" },
+        cwdBtn,
+        h("div", { class: "chat-input-actions-right" },
+          h("div", { class: "perm-dd", "data-perm-dd": "1", title: "权限级别" }),
+          sel,
+          sendBtn
+        )
+      )
     );
-
-    // 队列状态框：正在回复时显示“正在回复 · 开始时间 · 还有 N 条排队”
-    const queueEl = h("span", { class: "chat-queue hidden", "data-queue": "1" });
 
     const tools = h("div", { class: "chat-tools" },
       h("button", { class: "icon-btn icon-btn-sm", "data-new": "1", title: "新建对话" }, Icons.icon("plus-sm", 13)),
+      h("button", { class: "icon-btn icon-btn-sm", "data-qp": "1", title: "任务队列（排队/处理中）" }, Icons.icon("list", 13)),
       queueEl,
       h("span", { style: { fontSize: "11px", color: "var(--text-4)", fontFamily: "var(--font-mono)" } }, "Enter 发送 · Shift+Enter 换行")
     );
@@ -176,8 +262,10 @@
     inputTa = ta;
 
     const autosize = () => {
-      ta.style.height = "auto";
-      ta.style.height = Math.min(160, Math.max(24, ta.scrollHeight)) + "px";
+      ta.style.height = "0px";                       // 先归零，强制重新计算内容高度
+      const h = Math.min(160, Math.max(32, ta.scrollHeight));
+      ta.style.height = h + "px";
+      ta.style.overflowY = h >= 160 ? "auto" : "hidden";
     };
     ta.addEventListener("input", autosize);
     ta.addEventListener("keydown", e => {
@@ -196,22 +284,19 @@
       JIGSAW.ChatService.send(convId, v);       // 交给 ChatService
     });
     el("[data-new]", tools).addEventListener("click", () => JIGSAW.Router.navigate("/"));
+    el("[data-qp]", tools).addEventListener("click", () => JIGSAW.QueuePanel.open());
 
     setTimeout(() => ta.focus(), 30);
   }
 
-  // 渲染队列状态框：空闲隐藏；回复中显示开始时间；有排队时显示条数
+  // 渲染队列状态徽标（发送按钮旁）：空闲隐藏；回复中显示"正在回复"；有排队时显示条数
   function renderQueueStatus() {
     const qEl = el("[data-queue]", container);
     if (!qEl) return;
     const q = JIGSAW.ChatService.queueInfo();
     if (!q.busy) { qEl.classList.add("hidden"); qEl.textContent = ""; return; }
-    const t = q.startedAt ? new Date(q.startedAt) : null;
-    const time = t
-      ? String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0")
-      : "";
-    const pending = q.pending > 0 ? " · 还有 " + q.pending + " 条排队" : "";
-    qEl.textContent = "正在回复 · " + time + pending;
+    const pending = q.pending > 0 ? " · +" + q.pending : "";
+    qEl.textContent = "正在回复" + pending;
     qEl.classList.remove("hidden");
   }
 

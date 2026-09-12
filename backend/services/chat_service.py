@@ -24,6 +24,8 @@ system_prompt = """你是 JIGSAW 的主控智能体。JIGSAW 是一个多智能�
 - 简单请求：直接回答，不拆解。
 - 复杂任务：拆解为多个专业 Agent 分工协作（如 研究 Agent → 分析 Agent → 写作 Agent → 终审 Agent），按依赖顺序依次执行。每个 Agent 的执行状态（等待中 / 运行中 / 已完成 / 失败）实时显示在工作流页面，用户据此知道任务进行到哪一步。
 
+-目前还没有接入多Agent协作，先按单智能体模式处理即可。你可以调用工具（Tool）来辅助完成任务，工具列表可在前端查看。
+
 工作方式：
 1. 收到复杂任务时，先说明你的拆解计划：用哪几个 Agent、各自负责什么、先后顺序。
 2. 执行过程中，各节点状态即当前进度；你在回复中简要同步"当前进行到哪个节点、下一步是什么"。
@@ -34,7 +36,20 @@ system_prompt = """你是 JIGSAW 的主控智能体。JIGSAW 是一个多智能�
 2. 用结构化表达（分点、步骤）组织内容，避免堆砌。
 3. 不确定或缺乏依据的信息要明确说明，不编造。
 4. 始终使用与用户相同的语言。
-5. 不要提及或解释"是否拆解了任务""是否简单查询"这类内部流程，直接给出答案即可。"""
+5. 不要提及或解释"是否拆解了任务""是否简单查询"这类内部流程，直接给出答案即可。
+
+工具与信息验证：
+1. 涉及外部状态（文件内容、命令执行结果、进程、端口、网页抓取等）时，一律以工具本次实时返回的结果为准，不要仅凭对话历史或记忆推断当前状态。
+2. 只有工具实际执行成功并返回结果后，才能认为该操作已完成；工具未调用或执行失败时，如实说明失败情况，不得声称操作成功。
+
+询问用户（AskUser 工具）：
+1. 遇到以下情况，使用 AskUser 工具向用户提问，不要自作主张：
+   - 执行破坏性操作前（删除、移动、覆盖、格式化文件，清空目录等）；
+   - 用户意图不明确、有多种合理做法需要用户拍板时；
+   - 需要用户提供关键信息（账号、路径、选项、偏好等）才能继续时。
+2. 问题要具体、可回答，给出选项时用「A/B/C」形式,可以给出一个推荐的选项，但不要强行替用户选择。
+3. 用户回答后，按回答继续执行；用户取消时，停止该操作并说明，不要强行继续。
+4. 简单查询、纯信息类问题不要用 AskUser，直接回答。"""
 
 
 
@@ -49,6 +64,58 @@ class AiContextIn(BaseModel):
 def receive_context(payload: AiContextIn):
     print(payload.human_prompt)       # 先打印看看收到没有
     return {"ok": True, "received": len(payload.human_prompt)}
+
+def _run_tool(call: dict, task_id: str | None) -> str:
+    """执行一次工具调用，带权限控制：
+    - AskUser 工具：挂起等用户回答（普通提问，不带风险勾选框）
+    - 始终询问(ask)：所有工具调用前都弹窗确认
+    - 按需确认(auto)：风险操作每次弹窗确认
+    - 全部允许(allow)：风险操作首次弹窗告知（带"不再提醒"），勾选后不再弹
+    无 task_id（非异步调用）时跳过确认，直接执行。
+    """
+    from tools import permission_level, is_risky, risk_acknowledged, set_risk_acknowledged, execute
+    from services import task_service
+
+    name = call.get("name", "")
+    args = call.get("args") or {}
+
+    # 任务已被用户终止 → 不再弹窗/挂起/执行，直接给个结果让 AI 收尾
+    if task_service.is_cancelled(task_id):
+        return "任务已被用户终止，停止执行后续工具。"
+
+    # ① AskUser 工具：本身就是问用户，直接挂起（普通提问）
+    if name == "AskUser":
+        from tools import ask_user
+        if task_id:
+            q = args.get("question", "请确认")
+            return ask_user.ask(task_id, q)
+        return "错误：AskUser 需要任务上下文（task_id）"
+
+    # ② 其他工具：按权限级别决定要不要先问
+    if task_id:
+        level = permission_level()
+        risky = is_risky(name, args)
+        if level == "ask":
+            # 始终询问：所有工具调用都问
+            arg_text = "（" + "，".join(f"{k}={str(v)[:40]}" for k, v in args.items()) + "）" if args else ""
+            from tools import ask_user
+            return ask_user.ask(task_id, f"AI 想调用工具「{name}」{arg_text}，是否允许？")
+        if risky and (level == "auto" or not risk_acknowledged()):
+            # 按需确认：风险操作每次问；全部允许：风险操作首次问（带"不再提醒"）
+            cmd = args.get("command", "") if name == "shell" else ""
+            detail = f"「{cmd}」" if cmd else ""
+            from tools import ask_user
+            # risk=True：前端弹窗会显示"不再提醒"勾选框；
+            # 用户勾选后由 answer 接口的 noMore 标记写入，此处只管等待回答。
+            return ask_user.ask(
+                task_id,
+                f"⚠ 检测到风险操作：AI 要用「{name}」执行{detail}。确认继续吗？",
+                risk=True,
+            )
+
+    # ③ 不需要确认 → 直接执行
+    return execute(name, args)
+
 
 def _report_activity(name: str, args: dict) -> None:
     """把"正在调用 XX 工具"实时同步给前端（写入任务进度）。
@@ -68,7 +135,8 @@ def _report_activity(name: str, args: dict) -> None:
         pass
 
 
-def reply(conversation_id: str, message: str, model: dict | None = None, temperature: float | None = None) -> dict:
+def reply(conversation_id: str, message: str, model: dict | None = None,
+          temperature: float | None = None, task_id: str | None = None) -> dict:
     """
     生成回复。返回结构化结果，前端据此在气泡里显示"AI 用过的工具"。
 
@@ -77,6 +145,7 @@ def reply(conversation_id: str, message: str, model: dict | None = None, tempera
                {"model": "gpt-4o", "baseUrl": "https://...", "apiKey": "sk-..."}
                没配置时为 None，这时不发请求、直接给提示。
     temperature —— 前端 设置 → 模型 → 采样温度（0~2）。没传时用默认 0.9。
+    task_id —— 异步任务 id（AskUser 工具挂起/唤醒需要它）。非异步调用时可为 None。
 
     返回：{"reply": 回复文本, "toolsUsed": [用过的工具名, ...]}
     """
@@ -130,7 +199,7 @@ def reply(conversation_id: str, message: str, model: dict | None = None, tempera
             for call in resp.tool_calls:
                 used.append(call["name"])                  # 记下用过的工具
                 _report_activity(call["name"], call.get("args") or {})   # ★ 实时同步给前端
-                result = execute(call["name"], call.get("args") or {})
+                result = _run_tool(call, task_id)
                 messages.append(ToolMessage(
                     content=result,
                     tool_call_id=call["id"]

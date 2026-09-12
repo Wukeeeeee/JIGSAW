@@ -90,6 +90,7 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
   transition: border-color var(--transition);
 }
 .dd-btn:hover { border-color: var(--line-strong); }
+.dd-ico { display: inline-flex; align-items: center; color: var(--text-3); }
 .dd-small .dd-btn { height: 30px; font-size: 12px; }
 /* 设置页用：与同行的输入框同宽同高（32px）对齐 */
 .dd-stretch { display: flex; width: 100%; min-width: 180px; }
@@ -103,6 +104,7 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
 .dd-menu.hidden { display: none; }
 .dd-item {
   display: flex; flex-direction: column; gap: 2px;
+  position: relative;
   width: 100%; text-align: left; padding: 7px var(--sp-3);
   background: transparent; color: var(--text-1);
   border: 0; border-radius: 0; cursor: pointer; font-size: 13px;
@@ -111,6 +113,12 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
 .dd-item.sel { background: var(--line-1); }
 .dd-name { line-height: 1.4; }
 .dd-desc { font-size: 11px; color: var(--text-3); }
+/* 选中项右侧 √ 标记 */
+.dd-check {
+  position: absolute; right: 10px; top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex; color: var(--text-1);
+}
 
 /* ---- Badges / chips ---- */
 .badge {
@@ -122,6 +130,89 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
   text-transform: uppercase; white-space: nowrap;
 }
 .badge .dot { width: 5px; height: 5px; background: currentColor; border-radius: 0; display: block; }
+
+/* ---- AskModal（AskUser 工具弹窗：询问用户） ---- */
+.ask-overlay {
+  position: fixed; inset: 0; z-index: 500;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .45);
+}
+.ask-box {
+  width: 420px; max-width: calc(100vw - 48px);
+  background: var(--bg-raised);
+  border: 1px solid var(--line-2);
+  border-radius: 0;                 /* 直角 */
+  padding: var(--sp-5);
+  display: flex; flex-direction: column; gap: var(--sp-3);
+}
+.ask-title { font-size: 12px; color: var(--text-3); letter-spacing: .06em; display: flex; align-items: center; gap: 6px; }
+.ask-risk .ask-title { color: var(--text-1); font-weight: 600; }
+.ask-risk .ask-question { font-weight: 600; }
+.ask-nomore {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-3); cursor: pointer;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line-1);
+}
+.ask-nomore input { width: 13px; height: 13px; margin: 0; accent-color: var(--text-1); }
+
+/* ============ 任务队列面板 ============ */
+.qp-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0, 0, 0, .35);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 72px;
+}
+.qp-panel {
+  width: 420px; max-width: calc(100vw - 48px);
+  background: var(--bg-surface); border: 1px solid var(--line-1);
+  border-radius: 0;
+  box-shadow: none;
+}
+.qp-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line-1);
+}
+.qp-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
+.qp-list { max-height: 60vh; overflow-y: auto; padding: var(--sp-2); }
+.qp-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--line-1);
+}
+.qp-row:last-child { border-bottom: none; }
+.qp-badge { flex: none; font-size: 8px; color: var(--text-3); }
+.qp-badge.run { color: #c9a227; }
+.qp-info { flex: 1; min-width: 0; }
+.qp-text { font-size: 13px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qp-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+.qp-stop {
+  flex: none; width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--text-3);
+  border: 1px solid var(--line-1); border-radius: 0; cursor: pointer;
+}
+.qp-stop:hover { border-color: var(--text-1); color: var(--text-1); }
+.qp-empty { padding: var(--sp-6); text-align: center; font-size: 12px; color: var(--text-3); }
+.ask-question { font-size: 14px; color: var(--text-1); line-height: 1.5; }
+.ask-input {
+  height: 34px; padding: 0 var(--sp-3);
+  background: var(--bg-0); color: var(--text-1);
+  border: 1px solid var(--line-2); border-radius: 0;
+  font-size: 13px; outline: none;
+}
+.ask-input:focus { border-color: var(--text-1); }
+.ask-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+.ask-btn {
+  height: 30px; padding: 0 var(--sp-4);
+  background: transparent; color: var(--text-2);
+  border: 1px solid var(--line-2); border-radius: 0;
+  font-size: 12px; cursor: pointer;
+}
+.ask-btn:hover { border-color: var(--text-1); color: var(--text-1); }
+.ask-btn-primary { background: var(--text-1); color: var(--bg-0); border-color: var(--text-1); }
+.ask-btn-primary:hover { opacity: .85; }
 
 .badge-waiting  { color: var(--text-3); border-color: var(--line-2); }
 .badge-running { color: var(--white); border-color: var(--white); animation: badgePulse 1s ease-in-out infinite; }

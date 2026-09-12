@@ -58,6 +58,41 @@ def get_task(task_id: str):
     return task
 
 
+@router.get("/tasks")
+def list_tasks():
+    """任务队列面板：列出所有排队中 / 处理中的任务（可逐条终止）。"""
+    return {"tasks": task_service.list_active_tasks()}
+
+
+class AnswerIn(BaseModel):
+    answer: str
+    noMore: bool = False   # 用户勾选了"不再提醒"（风险确认弹窗）→ 此后不再弹
+
+
+@router.post("/tasks/{task_id}/answer")
+def answer_task(task_id: str, payload: AnswerIn):
+    """用户回答了 AskUser 的问题 → 唤醒挂起的任务，AI 继续执行。
+
+    noMore=True：用户在风险确认弹窗勾了"不再提醒" → 记到 tools.json，
+    全部允许模式下以后遇到风险操作直接执行、不再弹窗。
+    """
+    from tools import ask_user, set_risk_acknowledged
+    ok = ask_user.submit_answer(task_id, (payload.answer or "").strip())
+    if ok and payload.noMore:
+        set_risk_acknowledged(True)
+    return {"ok": ok, "task_id": task_id}
+
+
+@router.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str):
+    """终止任务（用户点"终止"按钮）：
+    - 排队中的任务：取消并从队列移除
+    - 处理中的任务：标记取消，卡在 AskUser 时立即唤醒；结果不写进会话
+    """
+    ok = task_service.cancel_task(task_id)
+    return {"ok": ok, "task_id": task_id}
+
+
 @router.delete("/conversations/{conversation_id}")
 def delete_conversation(conversation_id: str):
     """删除一个会话（历史记录）。前端删除时同步调用，否则重启后又会拉回来。"""

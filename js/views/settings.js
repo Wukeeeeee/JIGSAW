@@ -263,8 +263,8 @@
             )
           ),
           h("div", { class: "about-links" },
-            h("a", { class: "link", href: "#/", "data-link": "1" }, Icons.icon("link", 13), "文档"),
-            h("a", { class: "link", href: "#/", "data-link": "1" }, Icons.icon("code", 13), "源代码"),
+            h("a", { class: "link", href: "https://github.com/Wukeeeeee/JIGSAW", target: "_blank", rel: "noopener" }, Icons.icon("link", 13), "文档"),
+            h("a", { class: "link", href: "https://github.com/Wukeeeeee/JIGSAW", target: "_blank", rel: "noopener" }, Icons.icon("code", 13), "源代码"),
             h("a", { class: "link", href: "#/", "data-link": "1" }, Icons.icon("message", 13), "社区")
           )
         )

@@ -4,7 +4,7 @@
    CSS 管不到。这里用按钮 + 绝对定位浮层自绘，保证全直角、黑白灰。
    ============================================================ */
 (function () {
-  const { h } = JIGSAW;
+  const { h, Icons } = JIGSAW;
 
   let openMenu = null;
 
@@ -33,7 +33,7 @@
    * options: 模型列表 [{ id, name, desc? }]，也可以是“返回列表的函数”
    *          （传函数时每次打开菜单都会重新取数据，添加/删除模型后立即生效）
    * onChange(id) —— 选中时回调
-   * st: { minWidth, small }（small 用于聊天输入框的紧凑尺寸）
+   * st: { minWidth, small, stretch, icon }（icon: 按钮左侧的 SVG 图标名，如 "shield"）
    */
   function create(options, selectedId, onChange, st) {
     st = st || {};
@@ -42,6 +42,7 @@
     const btn = h("button", { class: "dd-btn", type: "button" }, null);
     const label = h("span", { class: "dd-label" }, "");
     const menu = h("div", { class: "dd-menu hidden" }, null);
+    if (st.icon) btn.insertAdjacentHTML("afterbegin", '<span class="dd-ico">' + Icons.icon(st.icon, 13) + "</span>");
     btn.append(label, chevron());
     wrap.append(btn, menu);
 
@@ -60,6 +61,8 @@
         }, null);
         item.append(h("span", { class: "dd-name" }, o.name));
         if (o.desc) item.append(h("span", { class: "dd-desc" }, o.desc));
+        // 选中项右侧打 √（当前选中）
+        if (o.id === selectedId) item.append(h("span", { class: "dd-check" }, Icons.icon("check", 12)));
         item.addEventListener("click", () => {
           selectedId = o.id;
           onChange(o.id);

@@ -61,6 +61,8 @@
 
 .msg-actions { display: flex; gap: var(--sp-1); opacity: 0; transition: opacity var(--transition); }
 .msg:hover .msg-actions { opacity: 1; }
+/* 处理中/排队中：终止按钮必须始终可见，不用 hover 就能点 */
+.msg-sending .msg-actions { opacity: 1; }
 .msg-actions .icon-btn { width: 26px; height: 26px; }
 
 /* pending (sending) */
@@ -76,30 +78,42 @@
 }
 .chat-input-inner { max-width: 760px; margin: 0 auto; }
 .chat-input-box {
-  display: flex; align-items: flex-end; gap: var(--sp-2);
+  display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-2);
   background: var(--bg-raised);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
-  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
   transition: border-color var(--transition);
 }
 .chat-input-box:focus-within { border-color: var(--line-strong); }
 .chat-input-box textarea {
-  flex: 1; min-height: 24px; max-height: 160px;
+  min-height: 32px; max-height: 160px;
   background: transparent; color: var(--text-1);
   font-size: 14px; line-height: 22px; resize: none; padding: 6px 0;
+  overflow-y: auto;   /* 超过最大高度时滚动，长文字也能看见 */
 }
 .chat-input-box textarea::placeholder { color: var(--text-3); }
-.chat-input-actions { display: flex; align-items: center; gap: var(--sp-1); }
+.chat-input-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.chat-input-actions-right { display: flex; align-items: center; gap: var(--sp-1); }
+/* 权限级别下拉（模型左边）：与模型/发送同高 */
+.chat-input-actions-right .perm-dd { flex: none; }
+.chat-input-actions-right .perm-dd .dd-btn { height: 34px; }
 .chat-input-bar .chat-tools {
   max-width: 760px; margin: var(--sp-2) auto 0;
   display: flex; align-items: center; gap: var(--sp-2);
 }
-/* 消息队列状态框：正在回复 / 还有 N 条排队 */
+/* 队列状态徽标（工具栏行，Enter 提示旁）：小圆点 + 文字 */
 .chat-queue {
-  display: inline-flex; align-items: center; height: 22px; padding: 0 8px;
-  font-family: var(--font-mono); font-size: 11px; color: var(--text-2);
-  background: var(--bg-raised); border: 1px solid var(--line-2); border-radius: 0;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--text-3);
+  white-space: nowrap;
+}
+.chat-queue::before {
+  content: ""; width: 6px; height: 6px; flex: none;
+  background: var(--text-3);
+  animation: caretBlink 1.2s steps(1) infinite;
 }
 .chat-queue.hidden { display: none; }
 .send-btn { width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center; background: var(--white); color: var(--black); border-radius: var(--radius); transition: background var(--transition); }

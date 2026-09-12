@@ -1,20 +1,68 @@
-"""工具路由：前端工具广场 读取工具列表 / 切换启用状态 / 总开关。"""
+"""工具路由：前端工具广场 读取工具列表 / 切换启用状态 / 总开关 / 进入项目工作。"""
+import queue
+import threading
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from tools import list_all_tools, set_enabled, tools_enabled, set_tools_enabled
+from tools import (
+    list_all_tools, set_enabled, tools_enabled, set_tools_enabled,
+    set_all_tools_enabled,
+    permission_level, set_permission_level,
+    shell_cwd_project, set_shell_cwd_project,
+    shell_cwd_path, set_shell_cwd_path, PROJECT_ROOT,
+)
 
 router = APIRouter()
 
 
 @router.get("/tools")
 def get_tools():
-    """返回全部工具（含启用状态）与总开关。前端工具广场用它渲染列表。"""
-    return {"tools": list_all_tools(), "enabled": tools_enabled()}
+    """返回全部工具（含启用状态）、总开关、"进入项目工作"开关与自定义目录。"""
+    return {
+        "tools": list_all_tools(),
+        "enabled": tools_enabled(),
+        "permission": permission_level(),
+        "cwdProject": shell_cwd_project(),
+        "cwdPath": shell_cwd_path(),
+        "projectRoot": PROJECT_ROOT,
+    }
 
 
 class ToggleIn(BaseModel):
     enabled: bool
+
+
+class CwdPathIn(BaseModel):
+    path: str
+
+
+def _ask_directory(initial: str) -> str | None:
+    """弹系统目录选择框。askdirectory 必须在其 Tk 实例自己的线程里跑，
+    这里为每次选择单独起一个线程 + 实例，返回选中的路径（取消返回 None）。"""
+    q = queue.Queue()
+
+    def _run():
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            path = filedialog.askdirectory(initialdir=initial or None, title="选择 JIGSAW 工作目录")
+            root.destroy()
+            q.put(path)
+        except Exception as e:
+            q.put(e)
+
+    threading.Thread(target=_run, daemon=True).start()
+    try:
+        result = q.get(timeout=300)
+    except queue.Empty:
+        return None
+    if isinstance(result, Exception):
+        raise result
+    return result or None
 
 
 @router.post("/tools/enabled")
@@ -22,6 +70,55 @@ def toggle_tools_master(payload: ToggleIn):
     """总开关：允许/不允许 AI 使用任何工具。"""
     set_tools_enabled(payload.enabled)
     return {"ok": True, "enabled": payload.enabled}
+
+
+@router.post("/tools/enable-all")
+def enable_all_tools(payload: ToggleIn):
+    """一键允许/禁用所有工具（“全部允许”按钮）。"""
+    set_all_tools_enabled(payload.enabled)
+    return {"ok": True, "enabled": payload.enabled}
+
+
+class PermissionIn(BaseModel):
+    level: str
+
+
+@router.post("/tools/permission")
+def set_permission(payload: PermissionIn):
+    """权限级别：ask=始终询问 / auto=按需确认 / allow=全部允许。"""
+    set_permission_level(payload.level)
+    return {"ok": True, "level": payload.level}
+
+
+@router.post("/tools/cwd-project")
+def toggle_cwd_project(payload: ToggleIn):
+    """"进入项目工作"开关：shell 命令是否在自定义工作目录执行。"""
+    set_shell_cwd_project(payload.enabled)
+    return {"ok": True, "enabled": payload.enabled}
+
+
+@router.post("/tools/cwd-pick")
+def pick_cwd_project():
+    """弹出系统目录选择框（桌面端）。选中 → 保存目录并自动开启"进入项目工作"。"""
+    try:
+        path = _ask_directory(shell_cwd_path() or PROJECT_ROOT)
+        if not path:
+            return {"ok": False, "cancelled": True}
+        set_shell_cwd_path(path)
+        set_shell_cwd_project(True)
+        return {"ok": True, "path": path}
+    except Exception as e:
+        return {"ok": False, "error": f"无法弹出目录选择框：{type(e).__name__}: {e}"}
+
+
+@router.post("/tools/cwd-path")
+def set_cwd_path(payload: CwdPathIn):
+    """手动设置工作目录（不弹框，由前端输入路径）。"""
+    path = (payload.path or "").strip()
+    if path:
+        set_shell_cwd_path(path)
+        set_shell_cwd_project(True)
+    return {"ok": True, "path": path}
 
 
 @router.post("/tools/{name}/toggle")

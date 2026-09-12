@@ -98,6 +98,7 @@
      */
     _busy: false,
     _queue: [],        // [{ convId, text, opts }]
+    _activeTaskId: null,   // 当前正在处理后端任务的 task_id（终止按钮用）
     _startedAt: null,  // 当前正在处理这条的开始时间（毫秒）
 
     /** 队列状态：busy=正在回复；pending=还有几条排队；startedAt=当前这条开始时间 */
@@ -150,11 +151,19 @@
 
       // 本条完成后：回调 → 释放 busy → 接着发下一条排队消息
       const done = (asstMsg) => {
+        if (this._activeTaskId) this._activeTaskId = null;
         if (opts && opts.onDone) opts.onDone(asstMsg);
         this._busy = false;
         this._startedAt = null;
         this._syncQueue();
         this._shift();
+      };
+
+      /** 终止当前正在处理的任务（排队中 / 处理中 / 卡在弹窗都可以） */
+      this.cancel = () => {
+        const tid = this._activeTaskId;
+        if (!tid) return Promise.resolve();
+        return JIGSAW.Http.cancelTask(tid).catch(e => console.warn("终止失败", e));
       };
 
       // ③ 拿到回复全文后，逐字显示（模拟打字效果，不是真流式）
@@ -192,10 +201,18 @@
           .then(res => {
             const taskId = res.task_id;
             if (!taskId) { fail("后端未返回任务编号：" + (res.message || "")); return; }
+            this._activeTaskId = taskId;    // 终止按钮要用的任务 id
             const poll = setInterval(() => {
               JIGSAW.Http.getTask(taskId).then(t => {
                 if (!t) { clearInterval(poll); fail("任务不存在（后端可能重启过）"); return; }
-                if (t.status === "done") {
+                if (t.status === "cancelled") {
+                  // 用户点了"终止"：气泡直接收尾
+                  clearInterval(poll);
+                  asstMsg.status = "done";
+                  asstMsg.text = asstMsg.full = "已终止";
+                  Store.notify("messages");
+                  done(asstMsg);
+                } else if (t.status === "done") {
                   clearInterval(poll);
                   asstMsg.toolsUsed = t.toolsUsed || [];   // 这轮用过的工具名，气泡展示
                   stream(t.reply || "（后端未返回内容）");
@@ -203,13 +220,30 @@
                   clearInterval(poll);
                   fail("任务失败：" + (t.error || "未知错误"));
                 } else {
-                  // ★ 实时状态：排队中（第 N 位）/ 正在调用 XX 工具 / 思考中
+                  // ★ 实时状态：排队中（第 N 位）/ 正在调用 XX 工具 / 思考中 / 等待用户回答
                   asstMsg.status = "streaming";
+                  // ★ AskUser / 风险确认：AI 想问你问题 → 弹窗（同一任务只弹一次）
+                  if (t.pendingQuestion && !JIGSAW.AskModalBusy) {
+                    JIGSAW.AskModalBusy = taskId;   // 防重复弹窗（轮询 2s 一次）
+                    JIGSAW.AskModal.show(t.pendingQuestion, taskId, { risk: !!t.pendingRisk })
+                      .then(res => {
+                        JIGSAW.AskModalBusy = null;
+                        if (res && res.answer !== null && res.answer !== undefined) {
+                          // 回答（含风险确认的"不再提醒"勾选状态）→ 交回后端唤醒任务
+                          JIGSAW.Http.answerTask(taskId, res.answer, res.noMore)
+                            .catch(e => console.warn("提交回答失败", e));
+                        } else if (res === null) {
+                          // 用户取消 → 传空 = 告诉后端"用户取消了"，立即唤醒
+                          JIGSAW.Http.answerTask(taskId, "")
+                            .catch(e => console.warn("提交回答失败", e));
+                        }
+                      });
+                  }
                   const pos = (t.status === "pending" && t.queue_position > 0)
                     ? `（第 ${t.queue_position} 位）` : "";
                   asstMsg.text = t.status === "pending"
                     ? `排队中${pos}…`
-                    : (t.activity || "思考中…");
+                    : (t.pendingQuestion ? "等待用户回答…" : (t.activity || "思考中…"));
                   Store.notify("messages");
                 }
               }).catch(err => {

@@ -8,6 +8,8 @@ const path = require("path");
 
 const APP_URL = "file://" + path.resolve(__dirname, "..", "index.html").replace(/\\/g, "/");
 
+let mainWindow = null;
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1320,
@@ -46,15 +48,32 @@ function createWindow() {
     return { action: "deny" };
   });
 
+  mainWindow = win;
+  win.on("closed", () => { mainWindow = null; });
   return win;
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+// ★ 单实例锁：防止重复启动（双击两次 BAT / 点两次 exe 只开一个窗口）
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // 已有实例在运行 → 这个新进程直接退出，什么都不弹
+  app.quit();
+} else {
+  // 用户再次启动 → 聚焦已有的窗口（而不是新开一个）
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
-});
+
+  app.whenReady().then(() => {
+    createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
