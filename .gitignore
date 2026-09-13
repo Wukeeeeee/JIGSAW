@@ -1,6 +1,8 @@
-# 密钥与本地数据（含 API Key，切勿上传）
-backend/data/models.json
-backend/data/*.json
+# 密钥与本地数据（含 API Key、会话记录、知识库文档，切勿上传）
+backend/data/
+
+# 工作区本地数据（记忆/会话上下文等，属本机私有状态，不上传）
+.workbuddy/
 
 # Python
 __pycache__/

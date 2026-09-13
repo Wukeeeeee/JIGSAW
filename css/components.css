@@ -139,6 +139,8 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
 }
 .ask-box {
   width: 420px; max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
   background: var(--bg-raised);
   border: 1px solid var(--line-2);
   border-radius: 0;                 /* 直角 */
@@ -154,7 +156,27 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
   padding: var(--sp-2) 0;
   border-top: 1px solid var(--line-1);
 }
-.ask-nomore input { width: 13px; height: 13px; margin: 0; accent-color: var(--text-1); }
+.ask-nomore input { width: 15px; height: 15px; margin: 0; cursor: pointer; accent-color: var(--text-1); }
+.ask-nomore:hover { color: var(--text-1); }
+
+/* 可点选项（AskUser 传了 options 时）：点一项即等于回答该项 */
+.ask-options { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ask-option {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  width: 100%; text-align: left;
+  padding: var(--sp-3); background: transparent; color: var(--text-1);
+  border: 1px solid var(--line-2); border-radius: 0; cursor: pointer;
+  font-size: 13px; line-height: 1.5; font-family: inherit;
+}
+.ask-option:hover { border-color: var(--text-1); background: var(--bg-overlay); }
+.ask-option-key {
+  flex: none; width: 18px; height: 18px; margin-top: 1px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line-2); font-size: 11px; color: var(--text-3);
+  font-family: var(--font-mono);
+}
+.ask-option:hover .ask-option-key { border-color: var(--text-1); color: var(--text-1); }
+.ask-option-text { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
 
 /* ============ 任务队列面板 ============ */
 .qp-overlay {
@@ -176,26 +198,56 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
 }
 .qp-title { font-size: 13px; font-weight: 600; color: var(--text-1); }
 .qp-list { max-height: 60vh; overflow-y: auto; padding: var(--sp-2); }
+/* 行外壳：头部一行（可点开）+ 展开后的正文 */
 .qp-row {
-  display: flex; align-items: center; gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-2);
+  display: flex; flex-direction: column; align-items: stretch;
   border-bottom: 1px solid var(--line-1);
 }
 .qp-row:last-child { border-bottom: none; }
+.qp-head-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-2);
+  cursor: pointer;
+}
+.qp-head-row:hover { background: var(--bg-overlay); }
 .qp-badge { flex: none; font-size: 8px; color: var(--text-3); }
 .qp-badge.run { color: #c9a227; }
 .qp-info { flex: 1; min-width: 0; }
 .qp-text { font-size: 13px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qp-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; }
-.qp-stop {
+.qp-chev { flex: none; display: flex; color: var(--text-4); }
+.qp-stop, .qp-act {
   flex: none; width: 26px; height: 26px;
   display: flex; align-items: center; justify-content: center;
   background: transparent; color: var(--text-3);
   border: 1px solid var(--line-1); border-radius: 0; cursor: pointer;
 }
-.qp-stop:hover { border-color: var(--text-1); color: var(--text-1); }
+.qp-stop:hover, .qp-act:hover { border-color: var(--text-1); color: var(--text-1); }
+
+/* 展开后的正文：默认收起，点行头才显示 */
+.qp-body { display: none; padding: 0 var(--sp-2) var(--sp-3) 26px; }
+.qp-row.open .qp-body { display: block; }
+.qp-message {
+  font-size: 12px; color: var(--text-2); line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--bg-0); border: 1px solid var(--line-1);
+  padding: var(--sp-3);
+}
+.qp-group {
+  font-size: 11px; color: var(--text-4); letter-spacing: .04em;
+  padding: var(--sp-3) var(--sp-2) var(--sp-1);
+}
+.qp-group:first-child { padding-top: var(--sp-1); }
+.qp-note {
+  font-size: 11px; color: var(--text-3);
+  padding: var(--sp-2); border-bottom: 1px solid var(--line-1);
+}
 .qp-empty { padding: var(--sp-6); text-align: center; font-size: 12px; color: var(--text-3); }
-.ask-question { font-size: 14px; color: var(--text-1); line-height: 1.5; }
+.ask-question {
+  font-size: 14px; color: var(--text-1); line-height: 1.5;
+  max-height: 42vh; overflow-y: auto;      /* 长问题（多行/A-B-C 罗列）不撑爆弹窗 */
+  white-space: pre-wrap; word-break: break-word;
+}
 .ask-input {
   height: 34px; padding: 0 var(--sp-3);
   background: var(--bg-0); color: var(--text-1);
@@ -212,7 +264,13 @@ textarea.input { height: auto; padding: var(--sp-3); resize: none; line-height: 
 }
 .ask-btn:hover { border-color: var(--text-1); color: var(--text-1); }
 .ask-btn-primary { background: var(--text-1); color: var(--bg-0); border-color: var(--text-1); }
-.ask-btn-primary:hover { opacity: .85; }
+/* ★ 必须显式写回 color：否则上面的 .ask-btn:hover 会把文字色改成 --text-1，
+   正好等于自身背景色 → 悬停时按钮文字"消失"（浅色主题下尤其明显）。 */
+.ask-btn-primary:hover {
+  background: var(--text-1); color: var(--bg-0); border-color: var(--text-1); opacity: .85;
+}
+.ask-btn-danger { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
+.ask-btn-danger:hover { background: rgba(229, 72, 77, .1); }
 
 .badge-waiting  { color: var(--text-3); border-color: var(--line-2); }
 .badge-running { color: var(--white); border-color: var(--white); animation: badgePulse 1s ease-in-out infinite; }

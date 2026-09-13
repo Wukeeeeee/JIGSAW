@@ -6,17 +6,33 @@ SCHEMA = {
     "function": {
         "name": "AskUser",
         "description": (
-            "向用户提问并等待回答。当需要用户确认、决策、补充信息、"
-            "或执行有风险的操作前需要用户同意时使用。"
-            "用户回答后，把回答内容作为工具结果返回给你。"
+            "向用户提问并等待回答。只要本轮需要「等用户回答了才能继续」，就必须调用本工具，"
+            "而不是把问题写在普通回复文本里（写在回复里任务会断掉，属于错误做法）。"
+            "适用：需要用户确认、决策、补充关键信息，或执行有风险的操作前需要用户同意。"
+            "要让用户在几个答案里选时，把答案放进 options 参数（前端会渲染成可点击按钮），"
+            "不要把 A/B/C/D 选项堆在 question 文字里。"
+            "调用后界面会弹出询问窗口并挂起任务；用户回答后，其回答会作为本工具的结果返回给你。"
+            "不要在简单查询、纯信息类问题上调用。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "要问用户的问题，需清晰、具体、可回答。",
-                }
+                    "description": (
+                        "要问用户的问题本身，需清晰、具体、可回答。"
+                        "只写问题，不要在这里罗列选项（选项走 options 参数）。"
+                    ),
+                },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "（可选）可点选的答案列表，最多 4 项。给了就把选项按钮化，用户点一下就回答，"
+                        "不用手打。推荐项放第一项，并在该项文字末尾标注「（推荐）」。"
+                        "选项要能独立看懂，例如「只删最明确的 3 个：debug.log、temp_output.tmp（推荐）」。"
+                    ),
+                },
             },
             "required": ["question"],
         },
@@ -27,25 +43,41 @@ SCHEMA = {
 _waiters: dict = {}
 
 
-def ask(task_id: str, question: str, risk: bool = False) -> str:
+def ask(task_id: str, question: str, risk: bool = False, options: list | None = None) -> str:
     """挂起当前任务：把问题发给前端，阻塞等用户回答。
 
     无限等待（不超时）：用户回答 → 返回答案；用户取消 → 返回"用户取消了此操作"。
     两个出口都在前端弹窗上，所以不会永久卡死；用户直接关掉 App 不答时，
     任务会挂到后端重启为止（单 Worker 场景下会挡住后续任务，可接受）。
     risk=True 表示风险确认弹窗（前端会显示"不再提醒"勾选框）。
+    options 是可选答案列表（最多 4 项），前端渲染成可点击按钮；风险确认弹窗不用它。
     """
+    opts = [str(o).strip() for o in (options or []) if str(o).strip()][:4]
     ev = threading.Event()
     _waiters[task_id] = {"question": question, "event": ev, "answer": None}
 
     # ① 问题写进任务状态 → 前端轮询看到 pendingQuestion → 弹窗
     from services import task_service
-    task_service.set_pending_question(task_id, question, risk)
+    task_service.set_pending_question(task_id, question, risk, opts)
 
     # ② 阻塞：Worker 线程停在这，等 submit_answer() 里 ev.set() 唤醒（不设超时）
     ev.wait()
     w = _waiters.pop(task_id, None)
     return w["answer"] if w and w["answer"] else "用户没有回答"
+
+
+def _clear_pending(task_id: str) -> None:
+    """清掉任务上挂起的问题。
+
+    ★ 必须在唤醒 Worker 之前调用：否则 pendingQuestion 会一直留到任务结束，
+    前端每 2 秒轮询又把同一个问题弹一次 —— "答完还弹"、"勾了不再提醒还弹"都是这个原因。
+    先清再唤醒，Worker 之后新提的问题不会被这次清理误删。
+    """
+    try:
+        from services import task_service
+        task_service.clear_pending_question(task_id)
+    except Exception:
+        pass
 
 
 def submit_answer(task_id: str, answer: str) -> bool:
@@ -57,7 +89,8 @@ def submit_answer(task_id: str, answer: str) -> bool:
     if not w:
         return False      # 找不到：任务已结束 / 没人问过
     w["answer"] = answer.strip() or "用户取消了此操作"
-    w["event"].set()      # ★ 唤醒阻塞中的 Worker 线程
+    _clear_pending(task_id)   # ★ 先清挂起问题，再唤醒（否则前端会重弹）
+    w["event"].set()          # ★ 唤醒阻塞中的 Worker 线程
     return True
 
 
@@ -68,6 +101,7 @@ def cancel(task_id: str) -> bool:
     不再继续等回答；Worker 随后按取消状态丢弃结果。
     """
     w = _waiters.get(task_id)
+    _clear_pending(task_id)
     if not w:
         return False
     w["answer"] = "任务已终止"

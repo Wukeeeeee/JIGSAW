@@ -11,6 +11,9 @@
   const uid = p => p + Math.random().toString(36).slice(2, 9);
   const now = () => new Date().toISOString();
 
+  // 每个任务"已经弹过的提问序号"：防止同一个问题被反复弹窗
+  JIGSAW._askShownSeq = JIGSAW._askShownSeq || {};
+
   function detectTemplate(text) {
     const s = text.toLowerCase();
     if (s.includes("gis") || s.includes("satellite") || s.includes("flood") || s.includes("map ")) return "gis";
@@ -108,27 +111,84 @@
 
     _syncQueue() { Store.notify("queue"); },
 
+    /** 排队中的消息（还没发给后端的几条）—— 任务队列面板据此提供查看 / 编辑 / 删除 */
+    listQueued() {
+      return this._queue.map(q => ({
+        id: q.id,
+        convId: q.convId,
+        conversation: (this.get(q.convId) || {}).title || "",
+        text: q.text
+      }));
+    },
+
+    /** 修改一条排队中的消息（尚未发送，改完按新内容发出去） */
+    updateQueued(id, text) {
+      const q = this._queue.find(x => x.id === id);
+      if (!q) return false;
+      q.text = text;
+      if (q.placeholder && q.placeholder.userMsg) q.placeholder.userMsg.text = text;
+      Store.notify("messages");
+      return true;
+    },
+
+    /** 删除一条排队中的消息（连同会话里"排队中…"的占位气泡一起移除） */
+    removeQueued(id) {
+      const i = this._queue.findIndex(x => x.id === id);
+      if (i < 0) return false;
+      const q = this._queue[i];
+      this._queue.splice(i, 1);
+      const conv = this.get(q.convId);
+      if (conv && q.placeholder) {
+        conv.messages = conv.messages.filter(m =>
+          m !== q.placeholder.userMsg && m !== q.placeholder.asstMsg);
+        Store.notify("messages");
+      }
+      this._syncQueue();
+      return true;
+    },
+
+    /** 终止当前正在处理的任务（空闲时空操作；实际逻辑由 _doSend 按本条任务覆盖） */
+    cancel() { return Promise.resolve(); },
+
     _shift() {
-      // 当前空闲且队列里有消息 → 取出下一条发送
+      // 当前空闲且队列里有消息 → 取出下一条发送（带上排队时的占位消息，避免闪烁）
       if (this._busy || !this._queue.length) { this._syncQueue(); return; }
       const next = this._queue.shift();
-      this._doSend(next.convId, next.text, next.opts);
+      this._doSend(next.convId, next.text, next.opts, next.placeholder);
     },
 
     /**
      * send(convId, text, { onDone }) → 发送一条消息
      * 正在回复时调用 → 自动排队（返回 null），完成后接着发，绝不并行。
+     * 排队时也立即把"你的消息 + 排队中"显示出来，避免发出去毫无反应。
      */
     send(convId, text, opts) {
       if (this._busy) {
-        this._queue.push({ convId, text, opts });
+        const item = { id: uid("q"), convId, text, opts: opts || {} };
+        item.placeholder = this._appendPlaceholder(convId, text);
+        this._queue.push(item);
         this._syncQueue();
         return null;
       }
       return this._doSend(convId, text, opts);
     },
 
-    _doSend(convId, text, opts) {
+    /** 把用户消息 + "排队中"占位立即渲染进会话（直发与排队共用） */
+    _appendPlaceholder(convId, text) {
+      const conv = this.get(convId);
+      if (!conv) return null;
+      const model = JIGSAW.ModelService.forConversation(convId);
+      const modelId = model ? model.id : null;
+      const userMsg = { id: uid("m"), role: "user", text, modelId, status: "done", createdAt: now() };
+      conv.messages.push(userMsg);
+      this.touch(convId);
+      const asstMsg = { id: uid("m"), role: "assistant", text: "排队中…", full: "", modelId, status: "queued", createdAt: now() };
+      conv.messages.push(asstMsg);
+      Store.notify("messages");
+      return { userMsg, asstMsg };
+    },
+
+    _doSend(convId, text, opts, placeholder) {
       const conv = this.get(convId);
       if (!conv) return null;
       this._busy = true;
@@ -136,17 +196,23 @@
 
       // 当前会话用的模型对象（设置 → 模型 里添加的自定义模型）
       const model = JIGSAW.ModelService.forConversation(convId);
-      const modelId = model.id;
+      const modelId = model ? model.id : null;
 
-      // ① 把"你输入的文字"记进这个会话的消息列表（前端本地记录）
-      const userMsg = { id: uid("m"), role: "user", text, modelId, status: "done", createdAt: now() };
-      conv.messages.push(userMsg);
+      // 排队路径：占位消息已存在 → 复用（用户消息已在会话里，不再重复加）
+      // 直发路径：新建用户消息 + 占位
+      let userMsg = null, asstMsg = null;
+      if (placeholder && placeholder.userMsg && placeholder.asstMsg) {
+        userMsg = placeholder.userMsg;
+        asstMsg = placeholder.asstMsg;
+        asstMsg.status = "streaming";
+        asstMsg.text = "";
+      } else {
+        userMsg = { id: uid("m"), role: "user", text, modelId, status: "done", createdAt: now() };
+        conv.messages.push(userMsg);
+        asstMsg = { id: uid("m"), role: "assistant", text: "", full: "", modelId, status: "streaming", createdAt: now() };
+        conv.messages.push(asstMsg);
+      }
       this.touch(convId);
-      Store.notify("messages");
-
-      // 先占一个"正在回复"的空位，后面流式填充
-      const asstMsg = { id: uid("m"), role: "assistant", text: "", full: "", modelId, status: "streaming", createdAt: now() };
-      conv.messages.push(asstMsg);
       Store.notify("messages");
 
       // 本条完成后：回调 → 释放 busy → 接着发下一条排队消息
@@ -159,11 +225,36 @@
         this._shift();
       };
 
-      /** 终止当前正在处理的任务（排队中 / 处理中 / 卡在弹窗都可以） */
+      // ★ 本条任务的终止状态：每次发送独立一份，避免下一条继承上一条的取消
+      let cancelled = false;
+      let localTaskId = null;
+      let settled = false;      // 本条是否已收尾（防止重复 done）
+      let stopTimers = null;    // 由远程分支赋值：一次清掉轮询 / 计时器
+
+      /** 收尾：气泡定格 → 释放 busy → 接着发下一条排队消息 */
+      const settle = (text) => {
+        if (settled) return;
+        settled = true;
+        if (stopTimers) stopTimers();
+        asstMsg.status = "done";
+        if (text !== undefined) asstMsg.text = asstMsg.full = text;
+        Store.notify("messages");
+        done(asstMsg);
+      };
+
+      /**
+       * 终止本条任务（排队中 / 思考中 / 等待回答 / 正在打字都能停）。
+       * 即使还没拿到后端 task_id（Http.chat 尚未返回），也先在前端收尾并释放队列，
+       * 等 task_id 到手再补一次后端终止 —— 保证"点了终止就有反应"，不会好像没生效。
+       */
       this.cancel = () => {
-        const tid = this._activeTaskId;
-        if (!tid) return Promise.resolve();
-        return JIGSAW.Http.cancelTask(tid).catch(e => console.warn("终止失败", e));
+        if (settled) return Promise.resolve();
+        cancelled = true;
+        const p = localTaskId
+          ? JIGSAW.Http.cancelTask(localTaskId).catch(e => console.warn("终止失败", e))
+          : Promise.resolve();
+        settle("已终止");
+        return p;
       };
 
       // ③ 拿到回复全文后，逐字显示（模拟打字效果，不是真流式）
@@ -174,14 +265,13 @@
         const chunk = speed === "slow" ? 2 : 4;
         let pos = 0;
         const timer = setInterval(() => {
+          if (settled) { clearInterval(timer); return; }   // 已被终止 → 立刻停止打字
           pos = Math.min(full.length, pos + chunk);
           asstMsg.text = full.slice(0, pos);
           Store.notify("messages");
           if (pos >= full.length) {
             clearInterval(timer);
-            asstMsg.status = "done";
-            Store.notify("messages");
-            done(asstMsg);
+            settle();                                       // 保留已显示的全文并收尾
           }
         }, msPerChunk);
       };
@@ -191,43 +281,61 @@
         // ===== 数据源 = 后端 API（异步任务） =====
         // Http.chat() 只把消息寄给后端并拿到 task_id（毫秒级返回）
         // 然后每 2 秒轮询任务状态，实时显示：排队中 → 正在调用 XX 工具 → 完成
-        const fail = (msg) => {
-          asstMsg.status = "done";
-          asstMsg.text = asstMsg.full = msg;
-          Store.notify("messages");
-          done(asstMsg);
-        };
         JIGSAW.Http.chat(convId, text, model)
           .then(res => {
             const taskId = res.task_id;
-            if (!taskId) { fail("后端未返回任务编号：" + (res.message || "")); return; }
+            if (!taskId) { settle("后端未返回任务编号：" + (res.message || "")); return; }
+            localTaskId = taskId;
+            if (cancelled || settled) {
+              // 拿到 task_id 之前就被终止了 → 补一次后端终止，不再接管 UI
+              JIGSAW.Http.cancelTask(taskId).catch(e => console.warn("终止失败", e));
+              return;
+            }
             this._activeTaskId = taskId;    // 终止按钮要用的任务 id
+
+            // ★ 等待时长本地连续计时：每秒刷新一次（不依赖 2s 轮询，显示平滑）
+            let statusText = "";   // 轮询写基准文案（排队中/思考中/…）
+            const applyWait = () => {
+              if (settled || asstMsg.status !== "streaming") return;
+              const waitSec = Math.floor((Date.now() - this._startedAt) / 1000);
+              asstMsg.text = statusText + (waitSec > 5 ? `（已等待 ${waitSec}s）` : "");
+              Store.notify("messages");
+            };
+            const waitTimer = setInterval(applyWait, 1000);
+
             const poll = setInterval(() => {
+              if (settled) return;
               JIGSAW.Http.getTask(taskId).then(t => {
-                if (!t) { clearInterval(poll); fail("任务不存在（后端可能重启过）"); return; }
+                if (settled) return;      // 已在别处收尾（用户终止等）→ 忽略这次结果
+                if (!t) { settle("任务不存在（后端可能重启过）"); return; }
                 if (t.status === "cancelled") {
                   // 用户点了"终止"：气泡直接收尾
-                  clearInterval(poll);
-                  asstMsg.status = "done";
-                  asstMsg.text = asstMsg.full = "已终止";
-                  Store.notify("messages");
-                  done(asstMsg);
+                  settle("已终止");
                 } else if (t.status === "done") {
-                  clearInterval(poll);
+                  if (stopTimers) stopTimers();
                   asstMsg.toolsUsed = t.toolsUsed || [];   // 这轮用过的工具名，气泡展示
                   stream(t.reply || "（后端未返回内容）");
                 } else if (t.status === "failed") {
-                  clearInterval(poll);
-                  fail("任务失败：" + (t.error || "未知错误"));
+                  settle("任务失败：" + (t.error || "未知错误"));
                 } else {
                   // ★ 实时状态：排队中（第 N 位）/ 正在调用 XX 工具 / 思考中 / 等待用户回答
                   asstMsg.status = "streaming";
-                  // ★ AskUser / 风险确认：AI 想问你问题 → 弹窗（同一任务只弹一次）
-                  if (t.pendingQuestion && !JIGSAW.AskModalBusy) {
-                    JIGSAW.AskModalBusy = taskId;   // 防重复弹窗（轮询 2s 一次）
-                    JIGSAW.AskModal.show(t.pendingQuestion, taskId, { risk: !!t.pendingRisk })
+                  // ★ AskUser / 风险确认：AI 想问你问题 → 弹窗
+                  // 用"提问序号"判断是不是新问题：同一个问题只弹一次。
+                  // （后端答完题会把 pendingQuestion 清掉，序号是双保险，
+                  //   避免状态还没清干净时把旧问题又弹一遍）
+                  const qSeq = (t.pendingQuestionSeq != null)
+                    ? t.pendingQuestionSeq : String(t.pendingQuestion);
+                  if (t.pendingQuestion && !JIGSAW.AskModalBusy
+                      && JIGSAW._askShownSeq[taskId] !== qSeq) {
+                    JIGSAW._askShownSeq[taskId] = qSeq;   // 防重复弹窗（轮询 2s 一次）
+                    JIGSAW.AskModalBusy = taskId;
+                    JIGSAW.AskModal.show(t.pendingQuestion, taskId, {
+                      risk: !!t.pendingRisk,
+                      options: t.pendingOptions || []
+                    })
                       .then(res => {
-                        JIGSAW.AskModalBusy = null;
+                        if (JIGSAW.AskModalBusy === taskId) JIGSAW.AskModalBusy = null;
                         if (res && res.answer !== null && res.answer !== undefined) {
                           // 回答（含风险确认的"不再提醒"勾选状态）→ 交回后端唤醒任务
                           JIGSAW.Http.answerTask(taskId, res.answer, res.noMore)
@@ -237,23 +345,25 @@
                           JIGSAW.Http.answerTask(taskId, "")
                             .catch(e => console.warn("提交回答失败", e));
                         }
-                      });
+                      })
+                      .catch(() => { if (JIGSAW.AskModalBusy === taskId) JIGSAW.AskModalBusy = null; });
                   }
                   const pos = (t.status === "pending" && t.queue_position > 0)
                     ? `（第 ${t.queue_position} 位）` : "";
-                  asstMsg.text = t.status === "pending"
+                  statusText = t.status === "pending"
                     ? `排队中${pos}…`
                     : (t.pendingQuestion ? "等待用户回答…" : (t.activity || "思考中…"));
-                  Store.notify("messages");
+                  applyWait();   // 立即刷新一次（不等 1s timer）
                 }
               }).catch(err => {
-                clearInterval(poll);
-                fail("请求任务状态失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）");
+                settle("请求任务状态失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）");
               });
             }, 2000);
+
+            stopTimers = () => { clearInterval(waitTimer); clearInterval(poll); };
           })
           .catch(err => {
-            fail("请求后端失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）");
+            settle("请求后端失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）");
           });
       } else {
         // ===== 数据源 = 本地 Mock =====

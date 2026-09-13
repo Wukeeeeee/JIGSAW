@@ -6,6 +6,7 @@
 
 :root {
   /* ---- surfaces ---- */
+  --bg-0:       #0a0a0a;   /* deepest background（输入框/按钮底等） */
   --bg-app:      #0a0a0a;   /* app shell / page background */
   --bg-surface:  #111111;   /* panels */
   --bg-raised:   #161616;   /* raised cards, inputs */
@@ -64,6 +65,18 @@
 
   --grid-size: 40px;
   --grid-line: rgba(255, 255, 255, 0.045);
+
+  /* ---- 兼容别名 ----
+     knowledge.css / home.css 里用的是早期命名（--bg-1/--bg-2/--bd/--fg/--mono）。
+     以前这些名字没定义 → var() 取值非法 → background 被丢弃变透明（悬停高亮全失效）。
+     这里统一映射到现行令牌，避免去改那几百行旧样式。 */
+  --bg-1:        #141414;   /* ≈ bg-surface 稍亮 */
+  --bg-2:        #1b1b1b;   /* ≈ bg-overlay（悬停/选中） */
+  --bd:          #242424;   /* = line-1 */
+  --bd-strong:   #4a4a4a;   /* = line-strong */
+  --fg:          #f2f2f2;   /* = text-1 */
+  --fg-dim:      #6d6d6d;   /* = text-3 */
+  --mono: "JetBrains Mono", "Cascadia Code", Consolas, "SF Mono", "Courier New", monospace;
 }
 
 /* ---- density (General → 密度)：覆盖 8px 间距体系 ---- */
@@ -82,6 +95,7 @@ html[data-font-size="large"] { font-size: 15px; }
 
 /* ---- light theme (Appearance → Theme) ---- */
 html[data-theme="light"] {
+  --bg-0:       #ffffff;   /* deepest background（浅色主题 = 白） */
   --bg-app:      #f6f6f6;
   --bg-surface:  #ffffff;
   --bg-raised:   #ffffff;
@@ -107,6 +121,14 @@ html[data-theme="light"] {
   --fail-border: #888888;
 
   --grid-line: rgba(0, 0, 0, 0.06);
+
+  /* 兼容别名（浅色） */
+  --bg-1:        #fafafa;
+  --bg-2:        #f0f0f0;   /* = bg-overlay */
+  --bd:          #dcdcdc;   /* = line-1 */
+  --bd-strong:   #888888;   /* = line-strong */
+  --fg:          #111111;   /* = text-1 */
+  --fg-dim:      #757575;   /* = text-3 */
 }
 
 /* ============================================================

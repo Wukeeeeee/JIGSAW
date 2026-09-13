@@ -44,6 +44,8 @@ def create_task(conversation_id: str, message: str,
             "activity": None,         # 实时进度文案，如 "正在调用 网页搜索（关岛签证）"
             "pendingQuestion": None,  # 待用户回答的问题（AskUser 工具用，非空时前端弹窗）
             "pendingRisk": False,     # 该弹窗是否是"风险确认"（是则显示不再提醒勾选框）
+            "pendingOptions": [],     # 该问题的可点选答案（前端渲染成按钮，最多 4 项）
+            "pendingQuestionSeq": 0,  # 提问序号：每次提问 +1，前端据此判断"这是新问题"
             "reply": None,
             "toolsUsed": [],
             "error": None,
@@ -79,44 +81,55 @@ def set_activity(text: str) -> None:
             TASKS[tid]["activity"] = text
 
 
-def set_pending_question(task_id: str, question: str, risk: bool = False) -> None:
+def set_pending_question(task_id: str, question: str, risk: bool = False,
+                         options: list | None = None) -> None:
     """把"待用户回答的问题"写进任务状态（AskUser 工具 / 风险确认）。
 
     前端轮询 GET /tasks/{id} 时看到 pendingQuestion 非空 → 弹窗给用户。
     risk=True 表示这是风险确认弹窗（显示"不再提醒"勾选框）。
+    options 是可点选答案（最多 4 项），前端渲染成按钮。
+    pendingQuestionSeq 每次 +1：前端只在序号变化时弹窗，
+    避免"用户已经答过、但状态还没清干净"时把同一个问题又弹一次。
     用户回答后由 chat.py 的 answer 接口调用 ask_user.submit_answer() 唤醒。
     """
     with _lock:
         if task_id in TASKS:
-            TASKS[task_id]["pendingQuestion"] = question
-            TASKS[task_id]["pendingRisk"] = bool(risk)
-            TASKS[task_id]["activity"] = "等待用户回答…"
+            t = TASKS[task_id]
+            t["pendingQuestion"] = question
+            t["pendingRisk"] = bool(risk)
+            t["pendingOptions"] = [str(o) for o in (options or [])][:4]
+            t["pendingQuestionSeq"] = int(t.get("pendingQuestionSeq") or 0) + 1
+            t["activity"] = "等待用户回答…"
 
 
 def clear_pending_question(task_id: str) -> None:
-    """任务结束/失败时清掉待回答问题，防止前端残留弹窗。"""
+    """任务结束/失败/用户已回答时清掉待回答问题，防止前端残留或重复弹窗。"""
     with _lock:
         if task_id in TASKS:
             TASKS[task_id]["pendingQuestion"] = None
             TASKS[task_id]["pendingRisk"] = False
+            TASKS[task_id]["pendingOptions"] = []
 
 
 def cancel_task(task_id: str) -> bool:
     """终止任务（用户点"终止"按钮）：
     - 排队中(pending)：直接标记取消，从队列移除，不再处理
     - 处理中(running)：标记取消；若卡在 AskUser 弹窗 → 立即唤醒；
-      Worker 在 reply 返回后检测到取消 → 丢弃结果，不写进会话
+      Worker 检测到取消后立刻放弃正在进行的模型调用，并丢弃结果、不写进会话
     """
     with _lock:
         task = TASKS.get(task_id)
         if task is None or task["status"] in ("done", "failed", "cancelled"):
             return False
+        stuck_on_question = bool(task.get("pendingQuestion"))   # 清空前先记下是否卡在提问
         task["status"] = "cancelled"
         task["activity"] = None
+        task["pendingQuestion"] = None
+        task["pendingRisk"] = False
+        task["pendingOptions"] = []
         task["finishedAt"] = _now_iso()
-        if task["status"] == "cancelled" and task_id in QUEUE:
+        if task_id in QUEUE:
             QUEUE.remove(task_id)
-        stuck_on_question = task.get("pendingQuestion")
     if stuck_on_question:
         # 卡在 AskUser 挂起 → 唤醒它（返回"任务已终止"），Worker 随后丢弃结果
         from tools import ask_user
@@ -138,10 +151,14 @@ def list_active_tasks() -> list:
                 "task_id": tid,
                 "conversation_id": task["conversation_id"],
                 "message": (task["message"] or "")[:60],
+                "messageFull": task["message"] or "",   # 完整内容（队列面板展开查看用）
                 "status": task["status"],
                 "queue_position": QUEUE.index(tid) if tid in QUEUE else 0,
                 "activity": task.get("activity"),
                 "pendingQuestion": task.get("pendingQuestion"),
+                "pendingRisk": bool(task.get("pendingRisk")),
+                "pendingOptions": task.get("pendingOptions") or [],
+                "pendingQuestionSeq": int(task.get("pendingQuestionSeq") or 0),
                 "createdAt": task.get("createdAt"),
             })
         items.sort(key=lambda t: t["createdAt"] or "")
@@ -216,11 +233,17 @@ def _worker() -> None:
                 task["finishedAt"] = _now_iso()
         except Exception as e:
             with _lock:
-                task["status"] = "failed"
-                task["error"] = f"{type(e).__name__}: {str(e)[:200]}"
-                task["activity"] = None
-                task["pendingQuestion"] = None   # 任务失败，同样清掉
-                task["finishedAt"] = _now_iso()
+                if task["status"] == "cancelled":
+                    # 已被用户终止 → 保持 cancelled，不要把状态改成 failed
+                    task["activity"] = None
+                    task["pendingQuestion"] = None
+                    task["finishedAt"] = _now_iso()
+                else:
+                    task["status"] = "failed"
+                    task["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+                    task["activity"] = None
+                    task["pendingQuestion"] = None   # 任务失败，同样清掉
+                    task["finishedAt"] = _now_iso()
         finally:
             with _lock:
                 _current_task_id = None

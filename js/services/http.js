@@ -22,13 +22,20 @@
     opts = opts || {};   // 允许只传路径的 GET（如拉取模型列表）
     const init = {
       method: opts.method || "GET",
-      headers: { "Content-Type": "application/json" },
       cache: "no-store"
     };
     // ★ 打包：把要传的数据（对象）变成"文字"（JSON 字符串）
     //   比如 {conversation_id:"c-tokyo", message:"你好"} → {"conversation_id":"c-tokyo","message":"你好"}
     //   两个程序之间只能传文字，所以必须先把对象变成文字
-    if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+    //   FormData（文件上传）例外：不设 Content-Type（浏览器自动带 boundary），body 原样传
+    if (opts.body !== undefined) {
+      if (typeof FormData !== "undefined" && opts.body instanceof FormData) {
+        init.body = opts.body;
+      } else {
+        init.headers = { "Content-Type": "application/json" };
+        init.body = JSON.stringify(opts.body);
+      }
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), (opts.timeout || 12000));
     init.signal = ctrl.signal;
@@ -135,6 +142,11 @@
       return request("/api/tools/permission", { method: "POST", body: { level } });
     },
 
+    /** POST /api/tools/risk-ack → "不再提醒"开关：true=风险操作不再弹窗，false=恢复提醒 */
+    setRiskAck(enabled) {
+      return request("/api/tools/risk-ack", { method: "POST", body: { enabled } });
+    },
+
     /** POST /api/tools/cwd-project → "进入项目工作"开关（shell 命令在自定义工作目录执行） */
     setCwdProject(enabled) {
       return request("/api/tools/cwd-project", { method: "POST", body: { enabled } });
@@ -153,6 +165,56 @@
     /** POST /api/tools/{name}/toggle → 切换工具启用/禁用 */
     toggleTool(name, enabled) {
       return request("/api/tools/" + encodeURIComponent(name) + "/toggle", { method: "POST", body: { enabled } });
+    },
+
+    /** GET /api/stats → 工具调用统计（起始时刻 / 各工具次数 / 最近一次） */
+    stats() {
+      return request("/api/stats");
+    },
+
+    /** POST /api/stats/reset → 重置统计（次数清零，起始时间改为当前时刻） */
+    resetStats() {
+      return request("/api/stats/reset", { method: "POST", body: {} });
+    },
+
+    /* ============ 知识库（本地文件系统 CRUD） ============ */
+    kbTree() {
+      return request("/api/knowledge/tree");
+    },
+    kbCreateFolder(name) {
+      return request("/api/knowledge/folder", { method: "POST", body: { name } });
+    },
+    kbRenameFolder(name, newName) {
+      return request("/api/knowledge/folder", { method: "PUT", body: { name, newName } });
+    },
+    kbDeleteFolder(folder) {
+      return request("/api/knowledge/folder?folder=" + encodeURIComponent(folder), { method: "DELETE" });
+    },
+    kbCreateDoc(folder, name, content) {
+      return request("/api/knowledge/doc", { method: "POST", body: { folder, name, content: content || "" } });
+    },
+    kbReadDoc(folder, name) {
+      return request("/api/knowledge/doc?folder=" + encodeURIComponent(folder) + "&name=" + encodeURIComponent(name));
+    },
+    kbSaveDoc(folder, name, content) {
+      return request("/api/knowledge/doc", { method: "PUT", body: { folder, name, content: content || "" } });
+    },
+    kbRenameDoc(folder, name, newName) {
+      return request("/api/knowledge/doc/rename", { method: "PUT", body: { folder, name, newName } });
+    },
+    kbDeleteDoc(folder, name) {
+      return request("/api/knowledge/doc?folder=" + encodeURIComponent(folder) + "&name=" + encodeURIComponent(name), { method: "DELETE" });
+    },
+    kbRoot() {
+      return request("/api/knowledge/root");
+    },
+    kbPickRoot() {
+      return request("/api/knowledge/root/pick", { method: "POST", body: {}, timeout: 300000 });
+    },
+    kbUpload(folder, file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      return request("/api/knowledge/upload?folder=" + encodeURIComponent(folder), { method: "POST", body: fd, timeout: 300000 });
     }
   };
 

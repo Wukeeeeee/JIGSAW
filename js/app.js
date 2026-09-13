@@ -52,6 +52,22 @@
     JIGSAW.ChatService.loadRemote();
   }
 
+  /* ---------- auto-connect：启动时自动探测后端，连上就切到后端模式 ---------- */
+  async function autoConnect() {
+    try {
+      const res = await JIGSAW.Http.health();   // 5 秒超时，失败即后端不可达
+      if (res) {
+        // 后端可达 → 自动切换为「后端 API」模式并标记已连接
+        JIGSAW.SettingsService.update("api", { mode: "remote", connected: true });
+        await JIGSAW.ToolService.load();          // 拉工具列表（工具广场 / 气泡标签用）
+        JIGSAW.ChatService.loadRemote();          // 拉会话历史
+        JIGSAW.ModelService.syncFromServer();     // 拉模型配置
+      }
+    } catch (e) {
+      /* 后端没起来：保持当前模式（mock），不打扰用户，进设置可手动连 */
+    }
+  }
+
   /* ---------- boot ---------- */
   function boot() {
     Toast.init();
@@ -64,6 +80,9 @@
 
     JIGSAW.HistoryDrawer.init(drawerRoot);
     JIGSAW.Router.mount(viewRoot);
+
+    // 页面先渲染，后台自动探测后端（不阻塞启动）
+    autoConnect();
 
     // unload current view before navigating
     let currentView = null;
@@ -107,6 +126,11 @@
     JIGSAW.Router.register("#/tools", (container, params) => {
       currentView = JIGSAW.Views.Tools;
       JIGSAW.Views.Tools.mount(container, params);
+    });
+
+    JIGSAW.Router.register("#/knowledge", (container, params) => {
+      currentView = JIGSAW.Views.Knowledge;
+      JIGSAW.Views.Knowledge.mount(container, params);
     });
 
     JIGSAW.Router.render();

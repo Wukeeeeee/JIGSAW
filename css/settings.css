@@ -36,6 +36,20 @@
   border: 1px solid var(--line-1); background: var(--bg-surface);
 }
 .settings-card + .settings-card { border-top: none; }
+
+/* 统计页：只读数值 + 各工具次数列表 */
+.stat-value { font-family: var(--font-mono); font-size: 12px; color: var(--text-1); }
+.stat-warn { color: var(--text-1) !important; font-weight: 600; }
+.stat-line {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-4); padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--line-1);
+  font-size: 12px;
+}
+.stat-line:last-child { border-bottom: none; }
+.stat-line-name { color: var(--text-1); }
+.stat-line-val { font-family: var(--font-mono); color: var(--text-2); }
+.stat-empty { padding: var(--sp-4); font-size: 12px; color: var(--text-3); }
 .setting-row {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
   padding: var(--sp-4);

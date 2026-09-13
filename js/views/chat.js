@@ -143,12 +143,14 @@
       h("div", { class: "topbar", style: { border: "none", padding: "0" } },
         h("button", { class: "btn btn-sm", "data-wf": "1" }, Icons.icon("branch", 13), "工作流"),
         h("button", { class: "btn btn-sm", "data-tools": "1" }, Icons.icon("tool", 13), "工具"),
+        h("button", { class: "btn btn-sm", "data-kb": "1" }, Icons.icon("book", 13), "知识库"),
         h("button", { class: "icon-btn", "data-settings": "1", title: "设置" }, Icons.icon("sliders"))
       )
     );
     el("[data-history]", header).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
     el("[data-wf]", header).addEventListener("click", () => JIGSAW.Router.navigate("/chat/" + convId + "/workflow"));
     el("[data-tools]", header).addEventListener("click", () => JIGSAW.Router.navigate("/tools"));
+    el("[data-kb]", header).addEventListener("click", () => JIGSAW.Router.navigate("/knowledge"));
     el("[data-settings]", header).addEventListener("click", () => JIGSAW.Router.navigate("/settings"));
   }
 
@@ -173,7 +175,10 @@
     // "项目"按钮（同首页）：选目录进入项目工作；点 × 退出
     const cwdBtn = h("button", { class: "cwd-btn", "data-cwd": "1", title: "选择目录，进入项目工作" }, "项目");
     // 队列状态徽标（发送按钮旁，data-queue 唯一）：空闲隐藏；回复中显示"正在回复 · +N"
-    const queueEl = h("span", { class: "chat-queue hidden", "data-queue": "1" });
+    // 点击它 → 打开任务队列面板（可展开查看 / 编辑 / 删除排队中的消息）
+    const queueEl = h("span", { class: "chat-queue hidden", "data-queue": "1", role: "button",
+      title: "查看任务队列：展开、编辑或删除排队中的消息" });
+    queueEl.addEventListener("click", () => JIGSAW.QueuePanel.open());
     const shortPath = p => { const parts = String(p || "").split(/[\\/]+/).filter(Boolean); return parts[parts.length - 1] || ""; };
     const refreshCwd = () => {
       const on = JIGSAW.ToolService.isCwdProject();
@@ -290,13 +295,14 @@
   }
 
   // 渲染队列状态徽标（发送按钮旁）：空闲隐藏；回复中显示"正在回复"；有排队时显示条数
+  // 徽标可点击 → 打开任务队列面板（排队消息在那里展开 / 编辑 / 删除）
   function renderQueueStatus() {
     const qEl = el("[data-queue]", container);
     if (!qEl) return;
     const q = JIGSAW.ChatService.queueInfo();
     if (!q.busy) { qEl.classList.add("hidden"); qEl.textContent = ""; return; }
     const pending = q.pending > 0 ? " · +" + q.pending : "";
-    qEl.textContent = "正在回复" + pending;
+    qEl.textContent = "正在回复" + pending + " ›";
     qEl.classList.remove("hidden");
   }
 

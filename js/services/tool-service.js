@@ -10,6 +10,10 @@
   let cwdProject = false;  // "进入项目工作"：shell 命令在自定义工作目录执行
   let cwdPath = "";        // 用户自定义工作目录（空 = 项目根目录）
   let projectRoot = "";    // 后端返回的项目根目录（显示用）
+  let riskAck = false;     // 风险确认弹窗是否已勾选"不再提醒"（true=不再弹）
+  // 工具调用统计：{ since, tz, calls:{工具名:次数}, lastUsed:{工具名:时间}, total }
+  let stats = { since: "", tz: "", calls: {}, lastUsed: {}, total: 0 };
+  let statsLoaded = false;  // 是否成功从后端拿到过统计（拿不到时界面要给明确提示）
 
   // 权限级别选项（工具广场选择器用，文案与 Claude Code 权限菜单一致）
   const PERMISSION_OPTIONS = [
@@ -27,6 +31,7 @@
         cache = data.tools || [];
         enabled = data.enabled !== false;
         permission = data.permission || "allow";
+        riskAck = !!data.riskAck;
         cwdProject = !!data.cwdProject;
         cwdPath = data.cwdPath || "";
         projectRoot = data.projectRoot || "";
@@ -50,6 +55,82 @@
       if (r && r.ok) permission = level;
       return r;
     },
+
+    /** 风险确认弹窗是否已勾选"不再提醒"（true = 风险操作直接执行、不再弹窗） */
+    riskAck() { return riskAck; },
+
+    /** 设置"不再提醒"；成功后更新本地状态（关闭勾选即恢复每次提醒） */
+    async setRiskAck(v) {
+      const r = await JIGSAW.Http.setRiskAck(v);
+      if (r && r.ok) riskAck = !!r.riskAck;
+      return r;
+    },
+
+    /* ============ 工具调用统计（设置 → 统计 / 工具详情页用） ============ */
+
+    /** 当前缓存的统计快照 */
+    stats() { return stats; },
+
+    /** 是否成功拿到过统计（false = 后端没返回，通常是后端没重启/新接口未生效） */
+    hasStats() { return statsLoaded; },
+
+    /** 某个工具被调用的次数 */
+    countOf(name) { return Number((stats.calls || {})[name] || 0); },
+
+    /** 从后端拉一次统计；失败保留旧缓存 */
+    async loadStats() {
+      if (!JIGSAW.Http.isRemote()) return stats;
+      try {
+        const r = await JIGSAW.Http.stats();
+        if (r && typeof r === "object") {
+          stats = {
+            since: r.since || "",
+            tz: r.tz || "",
+            calls: r.calls || {},
+            lastUsed: r.lastUsed || {},
+            total: Number(r.total || 0)
+          };
+          statsLoaded = true;
+        }
+      } catch (e) {
+        console.warn("拉取调用统计失败", e);
+      }
+      return stats;
+    },
+
+    /** 重置统计（次数清零 + 起始时间改为当前时刻）；成功后刷新本地缓存 */
+    async resetStats() {
+      const r = await JIGSAW.Http.resetStats();
+      if (r && r.ok) {
+        stats = {
+          since: r.since || "",
+          tz: r.tz || "",
+          calls: r.calls || {},
+          lastUsed: r.lastUsed || {},
+          total: Number(r.total || 0)
+        };
+        statsLoaded = true;
+      }
+      return r;
+    },
+
+    /**
+     * 把 ISO 时间格式化成「YYYYMMDD HH:mm:ss 时区」，如 20260914 00:49:26 UTC+08:00
+     * tzLabel 不传时用当前统计快照里的时区标签。
+     */
+    fmtTime(iso, tzLabel) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso);
+      const p = n => String(n).padStart(2, "0");
+      const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())} ` +
+                    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+      const tz = tzLabel === undefined ? (stats.tz || "") : (tzLabel || "");
+      return tz ? stamp + " " + tz : stamp;
+    },
+
+    /** 统计起始时刻的展示文本 */
+    sinceText() { return this.fmtTime(stats.since); },
 
     /** 总开关状态 */
     isEnabled() { return enabled; },

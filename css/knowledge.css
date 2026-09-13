@@ -1,0 +1,308 @@
+/* ===== 知识库（三栏：左树 | 中文档列表 | 右编辑器） ===== */
+.kb-view {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  z-index: 50;
+}
+.kb-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3, 8px);
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--bd);
+  background: var(--bg-0);
+  flex: none;
+}
+.kb-top-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.kb-top-path {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 320px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: var(--bg-2);
+  border: 1px solid var(--bd);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.kb-top-path svg { flex: none; opacity: .7; }
+.kb-top-path span { overflow: hidden; text-overflow: ellipsis; }
+.kb-top-spacer { flex: 1; }
+.kb-top .btn { height: 24px; }
+.kb-drag-hint { font-size: 11px; color: var(--fg-dim); font-weight: 400; }
+
+/* 拖拽高亮 */
+.kb-view.kb-dragover::after {
+  content: "松开导入文件到当前目录";
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 10, 10, .7);
+  color: var(--fg);
+  font-size: 14px;
+  border: 2px dashed var(--fg-dim);
+  pointer-events: none;
+}
+
+/* ===== 三栏主体 ===== */
+.kb-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 左栏：文件树 */
+.kb-side {
+  width: 240px;
+  flex: none;
+  border-right: 1px solid var(--bd);
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.kb-side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  letter-spacing: .5px;
+  border-bottom: 1px solid var(--bd);
+}
+.kb-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 6px 10px;
+  min-height: 0;
+}
+
+/* 树：文件夹行 */
+.kb-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.kb-folder:hover { background: var(--bg-2); }
+.kb-folder.active { background: var(--bg-2); border-color: var(--bd-strong); }
+.kb-caret {
+  flex: none;
+  display: flex;
+  width: 12px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  opacity: .6;
+}
+.kb-folder-icon { flex: none; opacity: .8; display: flex; }
+.kb-folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-count {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  background: var(--bg-2);
+  padding: 0 5px;
+  line-height: 15px;
+}
+.kb-folder-ops { display: flex; gap: 2px; flex: none; }
+
+/* 树：文档叶子 */
+.kb-leaf {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 28px;   /* 缩进到文件夹内容对齐 */
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.kb-leaf:hover { background: var(--bg-2); }
+.kb-leaf.active { background: var(--bg-2); border-color: var(--bd-strong); }
+.kb-leaf-icon { flex: none; display: flex; opacity: .7; }
+.kb-leaf-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-leaf-ops { display: flex; gap: 2px; flex: none; }
+
+/* 中栏：当前目录文档列表 */
+.kb-main {
+  width: 300px;
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--bd);
+  background: var(--bg-1);
+}
+.kb-main-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  border-bottom: 1px solid var(--bd);
+  flex: none;
+}
+.kb-main-head > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-docs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px;
+  min-height: 0;
+}
+.kb-doc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.kb-doc:hover { background: var(--bg-2); }
+.kb-doc.active { background: var(--bg-2); border-color: var(--bd-strong); }
+.kb-doc-icon { flex: none; display: flex; opacity: .75; }
+.kb-doc-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-doc-meta {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+}
+.kb-doc-ops { display: flex; gap: 2px; flex: none; }
+
+/* 右栏：编辑器 */
+.kb-editor-wrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 12px;
+  background: var(--bg-0);
+}
+.kb-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--bd);
+  background: var(--bg-0);
+}
+.kb-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--bd);
+  flex: none;
+}
+.kb-editor-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-editor-ops { display: flex; gap: 6px; flex: none; }
+.kb-textarea {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 10px 12px;
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--fg);
+  background: var(--bg-0);
+  border: none;
+  outline: none;
+  resize: none;
+  box-sizing: border-box;
+}
+.kb-empty {
+  padding: 14px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  text-align: center;
+}
+.kb-empty-lg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  border: 1px dashed var(--bd);
+}
+/* 二进制文件提示 */
+.kb-editor-binary { position: relative; align-items: center; justify-content: center; gap: 0; }
+.kb-editor-binary .kb-editor-head { position: absolute; top: 0; left: 0; right: 0; }
+.kb-binary-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 380px;
+  text-align: center;
+  padding: 0 20px;
+}
+.kb-binary-note svg { opacity: .4; }
+.kb-binary-t { font-size: 13px; font-weight: 600; color: var(--fg); }
+.kb-binary-s { font-size: 12px; line-height: 1.7; color: var(--fg-dim); }
+/* 通用小按钮 */
+.btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 0;
+  background: var(--bg-0);
+  color: var(--fg);
+  cursor: pointer;
+}
+.btn:hover { background: var(--bg-2); }
+.btn-sm { height: 22px; padding: 0 8px; font-size: 11.5px; }
+.btn-danger { color: var(--danger, #e5484d); border-color: var(--danger, #e5484d); }
+.btn-danger:hover { background: rgba(229, 72, 77, .1); }
+.icon-btn.mini { width: 20px; height: 20px; }

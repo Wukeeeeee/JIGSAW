@@ -9,6 +9,7 @@ from tools import (
     list_all_tools, set_enabled, tools_enabled, set_tools_enabled,
     set_all_tools_enabled,
     permission_level, set_permission_level,
+    risk_acknowledged, set_risk_acknowledged,
     shell_cwd_project, set_shell_cwd_project,
     shell_cwd_path, set_shell_cwd_path, PROJECT_ROOT,
 )
@@ -23,6 +24,7 @@ def get_tools():
         "tools": list_all_tools(),
         "enabled": tools_enabled(),
         "permission": permission_level(),
+        "riskAck": risk_acknowledged(),   # 风险确认弹窗是否已勾选"不再提醒"
         "cwdProject": shell_cwd_project(),
         "cwdPath": shell_cwd_path(),
         "projectRoot": PROJECT_ROOT,
@@ -88,6 +90,13 @@ def set_permission(payload: PermissionIn):
     """权限级别：ask=始终询问 / auto=按需确认 / allow=全部允许。"""
     set_permission_level(payload.level)
     return {"ok": True, "level": payload.level}
+
+
+@router.post("/tools/risk-ack")
+def set_risk_ack(payload: ToggleIn):
+    """"不再提醒"开关：true=以后风险操作直接执行（不再弹窗）；false=恢复每次提醒。"""
+    set_risk_acknowledged(payload.enabled)
+    return {"ok": True, "riskAck": payload.enabled}
 
 
 @router.post("/tools/cwd-project")

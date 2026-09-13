@@ -42,6 +42,7 @@
           ),
           h("div", { class: "home-top-right" },
             h("button", { class: "icon-btn", "data-tools": "1", title: "工具" }, Icons.icon("tool")),
+            h("button", { class: "icon-btn", "data-kb": "1", title: "知识库" }, Icons.icon("book")),
             h("button", { class: "icon-btn", "data-settings": "1", title: "设置" }, Icons.icon("sliders"))
           )
         ),
@@ -87,6 +88,7 @@
 
       el("[data-history]", view).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
       el("[data-tools]", view).addEventListener("click", () => JIGSAW.Router.navigate("/tools"));
+      el("[data-kb]", view).addEventListener("click", () => JIGSAW.Router.navigate("/knowledge"));
       el("[data-settings]", view).addEventListener("click", () => JIGSAW.Router.navigate("/settings"));
 
       // "项目"按钮：未开启点它 → 选目录进入；已开启点主体 → 换目录；点 × → 退出

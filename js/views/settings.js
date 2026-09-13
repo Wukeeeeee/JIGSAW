@@ -12,6 +12,7 @@
     { id: "model", label: "模型", icon: "cpu" },
     { id: "api", label: "API", icon: "key" },
     { id: "workflow", label: "工作流", icon: "branch" },
+    { id: "stats", label: "统计", icon: "database" },
     { id: "about", label: "关于", icon: "jigsaw" }
   ];
 
@@ -247,6 +248,69 @@
     ];
   }
 
+  /* ---- 统计：工具调用次数 + 记录起始时刻 + 重置 ---- */
+  function sectionStats(s) {
+    const TS = JIGSAW.ToolService;
+    const st = TS.stats() || {};
+    const calls = st.calls || {};
+    const total = Number(st.total || 0);
+    const rows = Object.keys(calls)
+      .map(k => [k, Number(calls[k] || 0)])
+      .filter(pair => pair[1] > 0)
+      .sort((a, b) => b[1] - a[1]);
+
+    const resetBtn = h("button", { class: "btn btn-sm" }, "重置统计");
+    resetBtn.addEventListener("click", async () => {
+      const ok = await JIGSAW.PromptModal.confirm({
+        title: "重置调用统计",
+        message: "所有工具的调用次数会清零，并把「记录起始」更新为当前时刻。确定重置吗？",
+        okText: "重置"
+      });
+      if (!ok) return;
+      resetBtn.disabled = true;
+      try {
+        await TS.resetStats();
+        JIGSAW.Toast.show("已重置统计");
+        renderContent();
+      } catch (e) {
+        JIGSAW.Toast.show("重置失败：" + (e.message || ""));
+      } finally {
+        resetBtn.disabled = false;
+      }
+    });
+
+    const countsBox = rows.length
+      ? rows.map(([name, v]) => {
+          const meta = TS.getMeta(name);
+          return h("div", { class: "stat-line" },
+            h("span", { class: "stat-line-name" }, (meta && meta.label) || name),
+            h("span", { class: "stat-line-val" }, v + " 次")
+          );
+        })
+      : h("div", { class: "stat-empty" }, "还没有调用记录。让 AI 用一次工具就会出现在这里。");
+
+    // 拿不到统计（多为后端没重启、新接口未生效）时，给明确提示而不是干瘪的"—"
+    const missing = JIGSAW.Http.isRemote() && !TS.hasStats();
+    const sinceLine = missing
+      ? "未获取到统计 —— 请重启后端（本次更新新增了 /api/stats 接口）。"
+      : "该统计自 " + TS.sinceText() + " 开始记录。";
+
+    return [
+      h("div", { class: "settings-section-title" }, "统计"),
+      // ★ 起始时刻放在标题正下方：一眼能看到，不用滚动
+      h("div", { class: "settings-section-sub" + (missing ? " stat-warn" : "") }, sinceLine),
+      h("div", { class: "settings-card" },
+        row("记录起始", "统计自该时刻开始记录（重置统计会同时更新它）。",
+          h("span", { class: "stat-value" }, missing ? "—" : TS.sinceText())),
+        row("累计调用", "所有工具的调用次数总和。",
+          h("span", { class: "stat-value" }, total + " 次")),
+        row("重置统计", "清零所有计数，并把记录起始时间更新为当前时刻。", resetBtn)
+      ),
+      h("div", { class: "settings-section-title", style: { marginTop: "var(--sp-5)" } }, "各工具调用次数"),
+      h("div", { class: "settings-card" }, countsBox)
+    ];
+  }
+
   function sectionAbout(s) {
     return [
       h("div", { class: "settings-section-title" }, "关于"),
@@ -274,7 +338,7 @@
     ];
   }
 
-  const RENDERERS = { general: sectionGeneral, appearance: sectionAppearance, model: sectionModel, api: sectionApi, workflow: sectionWorkflow, about: sectionAbout };
+  const RENDERERS = { general: sectionGeneral, appearance: sectionAppearance, model: sectionModel, api: sectionApi, workflow: sectionWorkflow, stats: sectionStats, about: sectionAbout };
 
   /* ---- 视图 ---- */
   function renderContent() {
@@ -314,6 +378,8 @@
           current = sec.id;
           els(".settings-nav-item", nav).forEach(x => x.classList.toggle("active", x.dataset.sec === current));
           renderContent();
+          // 统计页：先渲染缓存，再从后端拉一次最新统计并刷新
+          if (sec.id === "stats") JIGSAW.ToolService.loadStats().then(renderContent).catch(() => {});
         });
         nav.appendChild(item);
       });
@@ -327,6 +393,9 @@
       el("[data-back-s]", root).addEventListener("click", () => JIGSAW.Router.goBack());
 
       unsubs.push(Store.subscribe("settings", renderContent));
+
+      // 直接落在统计页时，也先拉一次最新统计
+      if (current === "stats") JIGSAW.ToolService.loadStats().then(renderContent).catch(() => {});
     },
 
     unmount() {

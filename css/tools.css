@@ -8,22 +8,48 @@
 .tools-title { font-family: var(--font-headline); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
 .tools-top-spacer { flex: 1; }
 
-.tools-body { flex: 1; overflow-y: auto; padding: var(--sp-6) var(--sp-8); }
+.tools-body { flex: 1; min-height: 0; display: flex; gap: var(--sp-6); padding: var(--sp-6) var(--sp-8); }
+.tools-left { flex: 1; min-width: 0; max-width: 680px; overflow-y: auto; }
 .tools-sub { font-size: 12px; color: var(--text-3); margin-bottom: var(--sp-5); }
-.tools-list { display: flex; flex-direction: column; gap: var(--sp-2); max-width: 640px; }
+.tools-list { display: flex; flex-direction: column; gap: var(--sp-2); }
 
 /* 总开关行（工具列表最上面） */
-.tool-master { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); max-width: 640px; padding: var(--sp-4); border: 1px solid var(--line-1); background: var(--bg-surface); margin-bottom: var(--sp-3); }
+.tool-master { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--line-1); background: var(--bg-surface); margin-bottom: var(--sp-3); }
 .tool-master.off .tm-label { color: var(--text-3); }
 .tm-label { font-size: 13px; color: var(--text-1); }
 .tm-desc { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 
-.tool-card { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--line-1); background: var(--bg-surface); }
+.tool-card { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4); border: 1px solid var(--line-1); background: var(--bg-surface); cursor: pointer; }
 .tool-card:hover { background: var(--bg-overlay); }
+.tool-card.selected { background: var(--bg-overlay); border-color: var(--text-2); }
 .tool-icon { flex: none; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 1px solid var(--line-1); color: var(--text-2); }
 .tool-info { flex: 1; min-width: 0; }
 .tool-name { font-size: 13px; color: var(--text-1); }
-.tool-desc { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.5; }
+.tool-desc { font-size: 11px; color: var(--text-3); margin-top: 2px; line-height: 1.5; white-space: pre-line; }
 .tool-params { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); margin-top: 4px; }
 
 .tools-empty { padding: var(--sp-6) 0; font-size: 12px; color: var(--text-3); }
+
+/* 右侧：工具详情面板 */
+.tools-detail { flex: none; width: 360px; border: 1px solid var(--line-1); background: var(--bg-surface); overflow-y: auto; align-self: flex-start; }
+.td-empty { padding: var(--sp-6); font-size: 12px; color: var(--text-3); }
+.td-panel { padding: var(--sp-5); }
+.td-head { display: flex; align-items: center; gap: var(--sp-4); padding-bottom: var(--sp-4); border-bottom: 1px solid var(--line-1); margin-bottom: var(--sp-4); }
+.td-big-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid var(--line-1); color: var(--text-1); flex: none; }
+.td-title { min-width: 0; }
+.td-name-lg { font-size: 14px; font-weight: 600; color: var(--text-1); }
+.td-id { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); margin-top: 2px; }
+.td-section { margin-bottom: var(--sp-5); }
+.td-sec-title { font-size: 11px; font-weight: 600; color: var(--text-3); letter-spacing: .5px; margin-bottom: var(--sp-2); }
+.td-note { font-size: 12px; color: var(--text-2); line-height: 1.6; }
+/* 调用统计：键值两列（键固定宽，值等宽字体，时间对齐好看） */
+.td-stat { display: grid; grid-template-columns: 88px 1fr; gap: var(--sp-2); padding: 3px 0; font-size: 12px; }
+.td-stat-k { color: var(--text-3); }
+.td-stat-v { color: var(--text-1); font-family: var(--font-mono); word-break: break-word; }
+.td-rows { border: 1px solid var(--line-1); }
+.td-row { display: grid; grid-template-columns: 110px 60px 1fr; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line-1); font-size: 11px; }
+.td-row:last-child { border-bottom: none; }
+.td-name { font-family: var(--font-mono); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-type { font-family: var(--font-mono); color: var(--text-3); }
+.td-desc { color: var(--text-3); line-height: 1.5; }
+.td-switch { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); font-size: 12px; color: var(--text-1); }

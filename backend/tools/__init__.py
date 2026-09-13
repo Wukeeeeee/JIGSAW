@@ -9,10 +9,11 @@ JIGSAW — 工具注册表
 2. 在下方 TOOLS 里登记一行
 3. 前端工具广场自动出现（无需改前端）
 """
+import asyncio
+import inspect
 import json
 import os
 
-from . import ask_user, fetch_url, shell, time, websearch
 
 # 工具状态文件（启用/禁用开关）
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -150,10 +151,15 @@ def _shell_risky(command: str) -> bool:
 def is_risky(name: str, args: dict) -> bool:
     """风险判断：
     - shell：命令里含删除/格式化/清空/关机等危险操作 → 高风险
+    - editfile：写文件会覆盖目标内容 → 视为风险操作（按需确认/全部允许模式下会弹窗确认）
     - 其他工具：默认低风险（不弹窗）
     """
     if name == "shell":
         return _shell_risky((args or {}).get("command", ""))
+    if name == "editfile":
+        return True
+    if name == "apply_patch":
+        return True
     return False
 
 
@@ -178,7 +184,9 @@ def _tool_meta(name: str, t: dict, enabled: bool) -> dict:
         "name": name,
         "icon": t.get("icon", "tool"),
         "label": t.get("label", name),
-        "description": fn.get("description", ""),
+        # 界面简介（desc）与给 LLM 的说明书（schema.description）分离：
+        # 界面显示短版；LLM 拿完整版
+        "description": t.get("desc", fn.get("description", "")),
         "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
         "enabled": enabled,
     }
@@ -187,6 +195,10 @@ def _tool_meta(name: str, t: dict, enabled: bool) -> dict:
 # ============================================================
 # 注册表：name -> { schema, run, icon, label }
 # ============================================================
+
+from . import ask_user, fetch_url, shell, time, websearch, editfile, apply_patch, calc, read_extra, knowledge_search
+
+
 TOOLS = {
     "get_current_time": {
         "schema": time.SCHEMA,
@@ -218,6 +230,44 @@ TOOLS = {
         "icon": "message",
         "label": "询问用户",
     },
+    "editfile": {
+        "schema": editfile.SCHEMA,
+        "run": editfile.run,
+        "icon": "editfile",
+        "label": "编辑文件",
+    },
+    "apply_patch": {
+        "schema": apply_patch.SCHEMA,
+        "run": apply_patch.run,
+        "icon": "patch",
+        "label": "应用补丁",
+        "desc": "用补丁批量修改一个或多个文本文件（多文件/大规模改动用；改单处用「编辑文件」）。",
+    },
+    "calc": {
+        "schema": calc.SCHEMA,
+        "run": calc.run,
+        "icon": "calc",
+        "label": "计算器",
+        "desc": "计算数学表达式（四则运算、括号、幂运算）。",
+    },
+    "read_extra": {
+        "schema": read_extra.SCHEMA,
+        "run": read_extra.run,
+        "icon": "readfile",
+        "label": "读取文件",
+        "desc": "读取Excel,Word,PPT等文件"
+    },
+    "knowledge_search": {
+        "schema": knowledge_search.SCHEMA,
+        "run": knowledge_search.run,
+        "icon": "book",
+        "label": "知识库检索",
+        "desc": "搜索知识库中与问题相关的资料片段"
+    }
+}
+
+
+TOOL_NAMES = {name for name, _ in TOOLS.items()
 }
 
 
@@ -256,7 +306,18 @@ def execute(name: str, args: dict) -> str:
         return f"错误：工具 {name} 不存在"
     if not _is_enabled(name):
         return f"工具 {name} 已被禁用"
+    # 调用统计：+1（统计写盘失败不影响工具执行）
     try:
-        return tool["run"](args or {})
+        from services import stats_service
+        stats_service.record(name)
+    except Exception:
+        pass
+    try:
+        result = tool["run"](args or {})
+        # ★ 统一兜底：如果某工具的 run 误返回协程（async 函数没执行），这里自动执行
+        #   防止 "coroutine has no len()" 这类错误再次出现
+        if inspect.iscoroutine(result):
+            result = asyncio.run(result)
+        return result
     except Exception as e:
         return f"工具执行失败：{type(e).__name__}: {e}"

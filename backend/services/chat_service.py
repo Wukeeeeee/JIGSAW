@@ -7,6 +7,7 @@ JIGSAW — ChatService（Mock 实现 / 用户替换点）
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 
 from langchain_openai import OpenAI
@@ -19,6 +20,49 @@ from langchain_core.messages import HumanMessage, SystemMessage,AIMessage,ToolMe
 from tools import list_tools, execute
 # 数据层：在后端代码里拿会话列表 / 消息，用 store
 from services.store import store
+# 任务队列：is_cancelled（终止检查）/ set_activity（实时进度同步给前端）
+from services import task_service
+
+
+class _TaskCancelled(Exception):
+    """内部信号：任务被用户终止 → 立即跳出模型调用 / 工具循环。"""
+
+
+_INVOKE_POLL_SECONDS = 0.25   # 可取消模型调用的取消检查间隔（秒）
+
+
+def _invoke_cancellable(llm, messages, task_id: str | None):
+    """可取消的模型调用。
+
+    问题：llm.invoke() 是一次阻塞的网络请求（可能几十秒到几分钟），用户点"终止"时
+    主线程还卡在里面，单 Worker 就一直被占着 → 后面排队的任务全部推不动。
+
+    做法：把阻塞调用放进子线程，主线程每 0.25 秒检查一次取消标记；一旦任务被终止就
+    立刻抛出 _TaskCancelled（放弃这次调用），Worker 随即释放、去处理下一条排队任务。
+    被放弃的子线程结果直接丢弃（写会话只发生在 Worker 主线程，不会被污染）。
+    task_id 为空（非异步调用）时退化为普通 invoke。
+    """
+    if not task_id:
+        return llm.invoke(messages)
+
+    box: dict = {}
+
+    def _call():
+        try:
+            box["resp"] = llm.invoke(messages)
+        except BaseException as e:      # 原样带回主线程抛出
+            box["err"] = e
+
+    th = threading.Thread(target=_call, daemon=True, name="jigsaw-llm-call")
+    th.start()
+    while th.is_alive():
+        if task_service.is_cancelled(task_id):
+            raise _TaskCancelled()
+        th.join(_INVOKE_POLL_SECONDS)
+    if "err" in box:
+        raise box["err"]
+    return box["resp"]
+
 
 system_prompt = """你是 JIGSAW 的主控智能体。JIGSAW 是一个多智能体（Multi-Agent）协作系统：
 - 简单请求：直接回答，不拆解。
@@ -43,13 +87,27 @@ system_prompt = """你是 JIGSAW 的主控智能体。JIGSAW 是一个多智能�
 2. 只有工具实际执行成功并返回结果后，才能认为该操作已完成；工具未调用或执行失败时，如实说明失败情况，不得声称操作成功。
 
 询问用户（AskUser 工具）：
+【硬性要求】只要你在这一轮需要"等用户回答了才能继续"，就必须调用 AskUser 工具，
+绝不能把问题写进普通回复里（那样用户只能在输入框里回你一句，任务会断掉，属于错误做法）。
+如果发现自己正准备在回复文本里向用户提问 —— 停下来，改用 AskUser 工具。
+判别标准：凡是"需要用户拍板 / 补充信息 / 同意风险操作"才算提问；任务已完成后的礼貌性反问、
+或不需要用户回答的说明性问句，不算，直接正常回复即可。
+
+【选项必须走 options 参数】当用户需要从几个答案里选时，把每个答案放进 options 数组
+（最多 4 个），不要把 A/B/C/D 选项堆在 question 文字里 —— 前端会把 options 渲染成可点击按钮，
+用户点一下就回答了。question 只写问题本身，可以带一句"请选一个"。
+推荐项放 options 第一项，并在该项文字末尾标注「（推荐）」。
+选项文字要能独立看懂，例如「只删最明确的 3 个：debug.log、temp_output.tmp（推荐）」，
+不要写成「A」「方案一」这种脱离了题目就看不懂的短标签。
+
 1. 遇到以下情况，使用 AskUser 工具向用户提问，不要自作主张：
    - 执行破坏性操作前（删除、移动、覆盖、格式化文件，清空目录等）；
    - 用户意图不明确、有多种合理做法需要用户拍板时；
    - 需要用户提供关键信息（账号、路径、选项、偏好等）才能继续时。
-2. 问题要具体、可回答，给出选项时用「A/B/C」形式,可以给出一个推荐的选项，但不要强行替用户选择。
+2. 问题要具体、可回答；给选项时一律用 options 参数，不要强行替用户选择。
 3. 用户回答后，按回答继续执行；用户取消时，停止该操作并说明，不要强行继续。
-4. 简单查询、纯信息类问题不要用 AskUser，直接回答。"""
+4. 简单查询、纯信息类问题不要用 AskUser，直接回答。
+5. 同一个问题只问一次：用户已经回答过，就按回答继续，不要重复提出同样的问题。"""
 
 
 
@@ -65,12 +123,58 @@ def receive_context(payload: AiContextIn):
     print(payload.human_prompt)       # 先打印看看收到没有
     return {"ok": True, "received": len(payload.human_prompt)}
 
+_REJECT_ANSWERS = ("用户取消了此操作", "用户没有回答", "任务已终止")
+
+# 可能长时间阻塞的工具：放子线程跑，好让"终止"能立刻把 Worker 释放出来
+_SLOW_TOOLS = {"shell", "websearch", "fetch_url", "apply_patch", "read_extra",
+               "knowledge_search", "editfile", "calc", "get_current_time"}
+
+
+def _answer_is_reject(answer: str) -> bool:
+    """用户在确认弹窗里选的是"取消/拒绝"（或任务已被终止）→ 视为不同意执行。"""
+    a = (answer or "").strip()
+    return (not a) or a in _REJECT_ANSWERS or a.startswith("任务已终止")
+
+
+def _execute_cancellable(name: str, args: dict, task_id: str | None) -> str:
+    """可取消的工具执行。
+
+    有些工具本身就慢（shell 命令最多 120 秒、网页抓取等）。如果在 Worker 线程里直接
+    等待，用户点"终止"后 Worker 仍要等它跑完才释放，后面的排队任务继续推不动。
+
+    做法与 _invoke_cancellable 一致：慢工具放子线程，主线程每 0.25s 查一次取消；
+    一旦终止就抛 _TaskCancelled 交回工具循环收尾。
+    注意：被放弃的 shell 子进程无法从 Python 侧强杀，它会自己跑完（最长 120 秒），
+    但结果会被丢弃、不会写进会话，也不会再影响后续任务。
+    """
+    if not task_id or name not in _SLOW_TOOLS:
+        return execute(name, args)
+
+    box: dict = {}
+
+    def _call():
+        try:
+            box["r"] = execute(name, args)
+        except BaseException as e:      # 原样带回主线程抛出
+            box["err"] = e
+
+    th = threading.Thread(target=_call, daemon=True, name="jigsaw-tool-call")
+    th.start()
+    while th.is_alive():
+        if task_service.is_cancelled(task_id):
+            raise _TaskCancelled()
+        th.join(_INVOKE_POLL_SECONDS)
+    if "err" in box:
+        raise box["err"]
+    return box["r"]
+
+
 def _run_tool(call: dict, task_id: str | None) -> str:
     """执行一次工具调用，带权限控制：
     - AskUser 工具：挂起等用户回答（普通提问，不带风险勾选框）
-    - 始终询问(ask)：所有工具调用前都弹窗确认
-    - 按需确认(auto)：风险操作每次弹窗确认
-    - 全部允许(allow)：风险操作首次弹窗告知（带"不再提醒"），勾选后不再弹
+    - 始终询问(ask)：所有工具调用前都弹窗确认；同意才执行，拒绝则不执行
+    - 按需确认(auto)：风险操作弹窗确认；勾选过"不再提醒"后不再弹
+    - 全部允许(allow)：同上（风险操作首次弹窗告知，带"不再提醒"）
     无 task_id（非异步调用）时跳过确认，直接执行。
     """
     from tools import permission_level, is_risky, risk_acknowledged, set_risk_acknowledged, execute
@@ -88,33 +192,48 @@ def _run_tool(call: dict, task_id: str | None) -> str:
         from tools import ask_user
         if task_id:
             q = args.get("question", "请确认")
-            return ask_user.ask(task_id, q)
+            opts = args.get("options") or []
+            if isinstance(opts, str):          # 模型偶尔会传字符串，容错成单选项
+                opts = [opts]
+            # AskUser 走特殊通道（不经过 execute），这里单独记一次调用统计
+            try:
+                from services import stats_service
+                stats_service.record("AskUser")
+            except Exception:
+                pass
+            return ask_user.ask(task_id, q, options=opts)
         return "错误：AskUser 需要任务上下文（task_id）"
 
     # ② 其他工具：按权限级别决定要不要先问
     if task_id:
+        from tools import ask_user
         level = permission_level()
         risky = is_risky(name, args)
         if level == "ask":
-            # 始终询问：所有工具调用都问
+            # 始终询问：所有工具调用都问；用户同意后真正执行该工具
             arg_text = "（" + "，".join(f"{k}={str(v)[:40]}" for k, v in args.items()) + "）" if args else ""
-            from tools import ask_user
-            return ask_user.ask(task_id, f"AI 想调用工具「{name}」{arg_text}，是否允许？")
-        if risky and (level == "auto" or not risk_acknowledged()):
-            # 按需确认：风险操作每次问；全部允许：风险操作首次问（带"不再提醒"）
+            ans = ask_user.ask(task_id, f"AI 想调用工具「{name}」{arg_text}，是否允许？")
+            if _answer_is_reject(ans):
+                return f"用户拒绝了对工具「{name}」的调用，已跳过，请停止该操作并向用户说明。"
+            return _execute_cancellable(name, args, task_id)
+        # 风险操作：弹窗确认（带"不再提醒"勾选框）。
+        # ★ 只要用户勾过"不再提醒"，按需确认 / 全部允许两种模式下都不再弹窗。
+        if risky and not risk_acknowledged():
             cmd = args.get("command", "") if name == "shell" else ""
             detail = f"「{cmd}」" if cmd else ""
-            from tools import ask_user
             # risk=True：前端弹窗会显示"不再提醒"勾选框；
             # 用户勾选后由 answer 接口的 noMore 标记写入，此处只管等待回答。
-            return ask_user.ask(
+            ans = ask_user.ask(
                 task_id,
                 f"⚠ 检测到风险操作：AI 要用「{name}」执行{detail}。确认继续吗？",
                 risk=True,
             )
+            if _answer_is_reject(ans):
+                return f"用户拒绝了风险操作「{name}」，已跳过，请停止该操作并向用户说明。"
+            return _execute_cancellable(name, args, task_id)
 
     # ③ 不需要确认 → 直接执行
-    return execute(name, args)
+    return _execute_cancellable(name, args, task_id)
 
 
 def _report_activity(name: str, args: dict) -> None:
@@ -170,6 +289,7 @@ def reply(conversation_id: str, message: str, model: dict | None = None,
         base_url=model.get("baseUrl") or None,
         api_key=model.get("apiKey") or None,
         max_tokens=1024,
+        timeout=300,   # ★ 单次模型调用最多等 5 分钟：超时抛异常 → 任务结束，不会无限卡
         extra_body={"thinking": {"type": "disabled"}},
     )
 
@@ -190,24 +310,48 @@ def reply(conversation_id: str, message: str, model: dict | None = None,
 
     # ⑤ 调模型；失败时把原因转成中文提示（而不是 500 报错）
     used = []   # 记录这轮回复用过的工具名（前端气泡展示用）
+    MAX_TOOL_ROUNDS = 200   # 工具调用轮数上限：几乎无限（写大文档都够），
+                            # 仅防"模型失控永远循环"这种真故障；正常长任务跑不完这么多轮
     try:
-        resp = llm_with_tools.invoke(messages)
+        resp = _invoke_cancellable(llm_with_tools, messages, task_id)
 
-        # ⑥ LLM 想用工具 → 执行 → 结果回填 → 带着结果再问一次
-        while resp.tool_calls:
+        # ⑥ LLM 想用工具 → 执行 → 结果回填 → 带着结果再问一次（最多 MAX_TOOL_ROUNDS 轮）
+        rounds = 0
+        while resp.tool_calls and rounds < MAX_TOOL_ROUNDS:
+            # ★ 用户点了"终止" → 工具循环立即退出，不再发起新的工具调用/确认
+            if task_id and task_service.is_cancelled(task_id):
+                raise _TaskCancelled()
+            rounds += 1
             messages.append(resp)                          # 它的"我要调工具"请求
             for call in resp.tool_calls:
+                # ★ 每次工具调用前再查一次终止：终止后不再执行后续工具
+                if task_id and task_service.is_cancelled(task_id):
+                    raise _TaskCancelled()
                 used.append(call["name"])                  # 记下用过的工具
                 _report_activity(call["name"], call.get("args") or {})   # ★ 实时同步给前端
                 result = _run_tool(call, task_id)
+                # 工具输出截断：防止几十轮后上下文爆炸（模型变慢/失忆/卡死）
+                if len(result) > 3000:
+                    result = result[:3000] + "\n…（工具输出过长已截断，仅保留开头 3000 字）"
                 messages.append(ToolMessage(
                     content=result,
                     tool_call_id=call["id"]
                 ))
             _report_activity("", {})                       # 工具执行完，恢复"思考中"
-            resp = llm_with_tools.invoke(messages)
+            resp = _invoke_cancellable(llm_with_tools, messages, task_id)
 
-        return {"reply": resp.content, "toolsUsed": used}
+        if resp.tool_calls:
+            # 达到轮数上限仍要工具 → 强制收尾：让模型停止调用，基于已有结果直接总结
+            messages.append(SystemMessage(
+                content=f"你已经连续调用了 {MAX_TOOL_ROUNDS} 轮工具，请立即停止调用工具，"
+                        "直接基于目前已获取的信息，给用户一个完整、可用的最终回答。"
+            ))
+            resp = _invoke_cancellable(llm_with_tools, messages, task_id)
+
+        return {"reply": resp.content or "（已完成，但没有生成文字回复）", "toolsUsed": used}
+    except _TaskCancelled:
+        # 用户终止：Worker 会按取消状态丢弃这条结果，不写进会话
+        return {"reply": "任务已终止（你中途取消了它）", "toolsUsed": used}
     except Exception as e:
         return {
             "reply": (

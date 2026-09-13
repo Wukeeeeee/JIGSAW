@@ -104,12 +104,16 @@
   max-width: 760px; margin: var(--sp-2) auto 0;
   display: flex; align-items: center; gap: var(--sp-2);
 }
-/* 队列状态徽标（工具栏行，Enter 提示旁）：小圆点 + 文字 */
+/* 队列状态徽标（工具栏行，Enter 提示旁）：小圆点 + 文字；可点击打开任务队列面板 */
 .chat-queue {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 11px; color: var(--text-3);
   white-space: nowrap;
+  cursor: pointer;
+  padding: 2px 4px;
+  border: 1px solid transparent;
 }
+.chat-queue:hover { color: var(--text-1); border-color: var(--line-2); }
 .chat-queue::before {
   content: ""; width: 6px; height: 6px; flex: none;
   background: var(--text-3);
