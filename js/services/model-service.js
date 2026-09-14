@@ -9,6 +9,14 @@
   const Store = JIGSAW.Store;
   const uid = p => p + Math.random().toString(36).slice(2, 9);
 
+  /**
+   * 模型唯一性判据：接口地址 + 模型 ID。
+   * 同 ID 不同地址（两家服务商都叫 deepseek-chat）是两个模型，要能并存；
+   * 只有地址 + ID 都相同才算同一条，避免同步时一个模型变两条。
+   */
+  const modelKey = m => (m.baseUrl || "").trim().replace(/\/+$/, "").toLowerCase()
+    + "::" + (m.modelId || "").trim();
+
   const ModelService = {
     /** built-in models only (fallback, never shown to the user) */
     builtin() { return MODELS; },
@@ -16,7 +24,14 @@
     /** user-defined custom models only — built-ins are reserved, not listed */
     list() {
       const custom = Store.get().settings.model.custom || [];
-      return custom.map(m => ({
+      // 去重兜底：老数据里可能因为 id 不一致存了同一模型的两份
+      const seen = new Set();
+      return custom.filter(m => {
+        const k = modelKey(m);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }).map(m => ({
         id: m.id,
         name: m.name,
         desc: m.baseUrl || "OpenAI 兼容 · 自定义",
@@ -38,6 +53,10 @@
 
     getActive() {
       const st = Store.get();
+      // 设置 → 模型 → 默认模型 优先（以前这一项设了根本不生效，新建会话用的是上一次选的）
+      const dm = st.settings && st.settings.model ? st.settings.model.defaultModel : null;
+      const d = this.byId(dm);
+      if (d) return d;
       return this.get(st.activeModelId);
     },
 
@@ -94,13 +113,14 @@
           const local = st.settings.model.custom || [];
           // 合并而非覆盖：后端有、本地没有 → 补进本地；
           // 本地独有的保留（可能是刚添加、还没同步到后端的）。
-          // 这样任何一边丢了，另一边都能把它救回来。
+          // 判重用「接口地址 + 模型 ID」而不是 id —— 前端 id 是随机生成的，
+          // 以前按 id 比对会让同一个模型在列表里出现两条。
           const byKey = new Map();
-          local.forEach(m => byKey.set(m.id || m.modelId, m));
+          local.forEach(m => byKey.set(modelKey(m), m));
           let changed = false;
           remote.forEach(m => {
-            const key = m.id || m.modelId;
-            if (!byKey.has(key)) { byKey.set(key, m); changed = true; }
+            const key = modelKey(m);
+            if (!byKey.has(key)) { byKey.set(key, { ...m, custom: true }); changed = true; }
           });
           if (changed) {
             JIGSAW.SettingsService.update("model", { custom: [...byKey.values()] });
@@ -129,7 +149,9 @@
       };
       custom.push(rec);
       JIGSAW.SettingsService.update("model", { custom });
+      // 带上前端生成的 id：后端沿用同一个 id，前后端就是同一条记录（同步时不会变两条）
       this._pushToServer("POST", "/api/models/custom", {
+        id: rec.id,
         name: rec.name, modelId: rec.modelId, baseUrl: rec.baseUrl, apiKey: rec.apiKey
       });
       return rec;
@@ -146,6 +168,11 @@
         name: patch.name, modelId: patch.modelId, baseUrl: patch.baseUrl, apiKey: patch.apiKey
       });
       return custom.find(m => m.id === id);
+    },
+
+    /** 按 id 取模型（用于界面显示；找不到返回 null，不再悄悄回退成第一个） */
+    byId(id) {
+      return id ? this.list().find(m => m.id === id) || null : null;
     },
 
     removeCustom(id) {

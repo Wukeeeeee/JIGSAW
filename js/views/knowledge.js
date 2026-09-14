@@ -19,7 +19,9 @@
 
   /* ---------- 数据 ---------- */
   async function loadTree() {
-    const r = await JIGSAW.Http.kbTree();
+    let r = null;
+    try { r = await JIGSAW.Http.kbTree(); }
+    catch (e) { JIGSAW.Toast.show("知识库加载失败：" + (e.message || "请检查后端连接")); tree = { folders: [], rootDocs: [] }; render(); return; }
     if (!r || !r.folders) { JIGSAW.Toast.show("知识库加载失败：请检查后端连接"); return; }
     tree = r;
     // 若当前分类已被删除，退回根
@@ -31,40 +33,43 @@
   }
 
   async function loadRoot() {
-    const r = await JIGSAW.Http.kbRoot();
-    if (r && r.path) rootPath = r.path;
+    try {
+      const r = await JIGSAW.Http.kbRoot();
+      if (r && r.path) rootPath = r.path;
+    } catch (e) { /* 后端没起：保持空，界面显示"选择目录" */ }
   }
 
   /* ---------- 交互动作 ---------- */
+  /** 统一包一层：后端 4xx/5xx 时 Http 会抛异常，不 catch 就变成"点了没反应" */
+  async function api(fn, failMsg) {
+    try { return await fn(); }
+    catch (e) { JIGSAW.Toast.show(failMsg + "：" + (e.message || "")); return null; }
+  }
+
   async function pickDoc(folder, name) {
     if (dirty && !(await JIGSAW.PromptModal.confirm({ title: "未保存的修改", message: "当前文档有未保存修改，放弃并切换？" }))) return;
-    const r = await JIGSAW.Http.kbReadDoc(folder, name);
-    if (!r || typeof r.content !== "string") { JIGSAW.Toast.show("读取失败"); return; }
+    const r = await api(() => JIGSAW.Http.kbReadDoc(folder, name), "读取失败");
+    if (!r || typeof r.content !== "string") return;
     activeDoc = { folder, name, editable: r.editable, error: r.error };
     docContent = r.content;
     dirty = false;
     render();
   }
 
-  function saveDoc() {
-    if (!activeDoc) return;
-    if (saving) return;
+  async function saveDoc() {
+    if (!activeDoc || saving) return;
     saving = true;
-    JIGSAW.Http.kbSaveDoc(activeDoc.folder, activeDoc.name, docContent)
-      .then(r => {
-        if (r && r.ok) { dirty = false; JIGSAW.Toast.show("已保存"); loadTree(); }
-        else JIGSAW.Toast.show("保存失败");
-      })
-      .finally(() => { saving = false; });
+    const r = await api(() => JIGSAW.Http.kbSaveDoc(activeDoc.folder, activeDoc.name, docContent), "保存失败");
+    saving = false;
+    if (r && r.ok) { dirty = false; JIGSAW.Toast.show("已保存"); loadTree(); render(); }
   }
 
   async function newDoc() {
     const name = await JIGSAW.PromptModal.prompt({ title: "新建文档", placeholder: "如：东京攻略.md", initial: "新文档.md" });
     if (!name || !name.trim()) return;
     const folder = activeFolder;
-    const r = await JIGSAW.Http.kbCreateDoc(folder, name.trim(), "");
+    const r = await api(() => JIGSAW.Http.kbCreateDoc(folder, name.trim(), ""), "创建失败");
     if (r && r.ok) { JIGSAW.Toast.show("已创建"); await loadTree(); pickDoc(folder, name.trim()); }
-    else JIGSAW.Toast.show("创建失败：" + (r && r.error ? r.error : "重名？"));
   }
 
   async function renameDoc() {
@@ -72,41 +77,44 @@
     const name = await JIGSAW.PromptModal.prompt({ title: "重命名文档", initial: activeDoc.name });
     if (!name || !name.trim() || name.trim() === activeDoc.name) return;
     const { folder, name: oldName } = activeDoc;
-    const r = await JIGSAW.Http.kbRenameDoc(folder, oldName, name.trim());
+    const r = await api(() => JIGSAW.Http.kbRenameDoc(folder, oldName, name.trim()), "重命名失败");
     if (r && r.ok) { JIGSAW.Toast.show("已重命名"); activeDoc = { folder, name: name.trim() }; loadTree(); }
-    else JIGSAW.Toast.show("重命名失败");
   }
 
   async function deleteDoc() {
     if (!activeDoc) return;
     if (!(await JIGSAW.PromptModal.confirm({ title: "删除文档", message: `删除文档「${activeDoc.name}」？此操作不可恢复。`, danger: true }))) return;
     const { folder, name } = activeDoc;
-    const r = await JIGSAW.Http.kbDeleteDoc(folder, name);
+    const r = await api(() => JIGSAW.Http.kbDeleteDoc(folder, name), "删除失败");
     if (r && r.ok) { activeDoc = null; docContent = ""; dirty = false; JIGSAW.Toast.show("已删除"); loadTree(); }
-    else JIGSAW.Toast.show("删除失败");
   }
 
   async function newFolder() {
     const name = await JIGSAW.PromptModal.prompt({ title: "新建分类", placeholder: "可带 / 支持嵌套，如：旅行/日本" });
     if (!name || !name.trim()) return;
-    const r = await JIGSAW.Http.kbCreateFolder(name.trim());
-    if (r && r.ok) { JIGSAW.Toast.show("已创建分类"); loadTree(); }
-    else JIGSAW.Toast.show("创建失败：" + (r && r.error ? r.error : ""));
+    const r = await api(() => JIGSAW.Http.kbCreateFolder(name.trim()), "创建失败");
+    if (r && r.ok) { JIGSAW.Toast.show("已创建分类"); expanded[name.trim()] = true; loadTree(); }
   }
 
   async function renameFolder(folder) {
     const name = await JIGSAW.PromptModal.prompt({ title: "重命名分类", initial: folder });
     if (!name || !name.trim() || name.trim() === folder) return;
-    const r = await JIGSAW.Http.kbRenameFolder(folder, name.trim());
-    if (r && r.ok) { if (activeFolder === folder) activeFolder = name.trim(); JIGSAW.Toast.show("已重命名"); loadTree(); }
-    else JIGSAW.Toast.show("重命名失败");
+    const r = await api(() => JIGSAW.Http.kbRenameFolder(folder, name.trim()), "重命名失败");
+    if (r && r.ok) {
+      if (activeFolder === folder) activeFolder = name.trim();
+      expanded[name.trim()] = expanded[folder]; delete expanded[folder];
+      JIGSAW.Toast.show("已重命名"); loadTree();
+    }
   }
 
   async function deleteFolder(folder) {
     if (!(await JIGSAW.PromptModal.confirm({ title: "删除分类", message: `删除分类「${folder}」及其中全部文档？此操作不可恢复。`, danger: true }))) return;
-    const r = await JIGSAW.Http.kbDeleteFolder(folder);
-    if (r && r.ok) { if (activeFolder === folder) { activeFolder = ""; activeDoc = null; docContent = ""; dirty = false; } JIGSAW.Toast.show("已删除"); loadTree(); }
-    else JIGSAW.Toast.show("删除失败");
+    const r = await api(() => JIGSAW.Http.kbDeleteFolder(folder), "删除失败");
+    if (r && r.ok) {
+      if (activeFolder === folder) { activeFolder = ""; activeDoc = null; docContent = ""; dirty = false; }
+      delete expanded[folder];
+      JIGSAW.Toast.show("已删除"); loadTree();
+    }
   }
 
   /* ---------- 拖拽导入 ---------- */
@@ -138,35 +146,43 @@
     view.addEventListener("drop", onDrop);
   }
 
-  function pickRoot() {
-    JIGSAW.Http.kbPickRoot().then(r => {
-      if (r && r.ok) { rootPath = r.path; activeFolder = ""; activeDoc = null; docContent = ""; dirty = false; JIGSAW.Toast.show("已切换知识库目录"); loadTree(); }
-      else if (r && r.cancelled) { /* 用户取消 */ }
-      else JIGSAW.Toast.show("切换目录失败：" + (r && r.error ? r.error : ""));
-    });
+  async function pickRoot() {
+    const r = await api(() => JIGSAW.Http.kbPickRoot(), "切换目录失败");
+    if (r && r.ok) {
+      rootPath = r.path; activeFolder = ""; activeDoc = null; docContent = ""; dirty = false;
+      JIGSAW.Toast.show("已切换知识库目录"); loadTree();
+    }
+    // r.cancelled = 用户关掉了选择框，什么都不做
   }
 
   /* ---------- 树行构造 ---------- */
+  function isOpen(key) {
+    // 根目录的展开状态记在 expanded.root（key 为 ""），分类记在 expanded[分类名]
+    return key === "" ? expanded.root !== false : !!expanded[key];
+  }
+
   function folderRow(key, label, count, isRoot) {
-    const open = !!expanded[key];
-    const row = h("div", { class: "kb-folder" + (activeFolder === key ? " active" : "") },
+    const open = isOpen(key);
+    const row = h("div", { class: "kb-folder" + (activeFolder === key ? " active" : ""), "data-folder": key },
       h("span", { class: "kb-caret" }, JIGSAW.Icons.icon(open ? "chev-down" : "chev-right", 11)),
       h("span", { class: "kb-folder-icon" }, JIGSAW.Icons.icon("folder", 13)),
       h("span", { class: "kb-folder-name" }, label),
       h("span", { class: "kb-count" }, String(count))
     );
     if (!isRoot) {
-      row.appendChild(
-        h("div", { class: "kb-folder-ops" },
-          h("button", { class: "icon-btn mini", "data-rf": key, title: "重命名" }, JIGSAW.Icons.icon("editfile", 11)),
-          h("button", { class: "icon-btn mini", "data-df": key, title: "删除" }, JIGSAW.Icons.icon("trash", 11))
-        )
-      );
+      const rf = h("button", { class: "icon-btn mini", "data-rf": key, title: "重命名" }, JIGSAW.Icons.icon("editfile", 11));
+      const df = h("button", { class: "icon-btn mini", "data-df": key, title: "删除分类" }, JIGSAW.Icons.icon("trash", 11));
+      // ★ 直接在这里绑：以前是在 render() 里按 [data-folder] 反查再绑，
+      //   而那时 row 上没有 data-folder 属性 → 查不到 → 重命名/删除点了没反应
+      rf.addEventListener("click", e => { e.stopPropagation(); renameFolder(key); });
+      df.addEventListener("click", e => { e.stopPropagation(); deleteFolder(key); });
+      row.appendChild(h("div", { class: "kb-folder-ops" }, rf, df));
     }
     row.addEventListener("click", async e => {
       if (e.target.closest("[data-rf]") || e.target.closest("[data-df]")) return;
       if (dirty && !(await JIGSAW.PromptModal.confirm({ title: "未保存的修改", message: "当前文档有未保存修改，放弃并切换？" }))) return;
-      expanded[key] = !expanded[key];       // 展开/收起
+      if (key === "") expanded.root = !expanded.root;   // 展开/收起
+      else expanded[key] = !expanded[key];
       activeFolder = key;                    // 选中该节点
       activeDoc = null; docContent = ""; dirty = false;
       render();
@@ -243,25 +259,16 @@
 
     // 根目录节点
     treeEl.appendChild(folderRow("", "根目录", rootDocs.length, true));
-    if (expanded.root) rootDocs.forEach(d => treeEl.appendChild(docLeaf("", d)));
+    if (isOpen("")) rootDocs.forEach(d => treeEl.appendChild(docLeaf("", d)));
 
-    // 分类节点
+    // 分类节点（嵌套分类的 name 是相对路径，如 "旅行/日本"）
     folders.forEach(f => {
       treeEl.appendChild(folderRow(f.name, f.name, f.docs.length, false));
-      if (expanded[f.name]) f.docs.forEach(d => treeEl.appendChild(docLeaf(f.name, d)));
+      if (isOpen(f.name)) f.docs.forEach(d => treeEl.appendChild(docLeaf(f.name, d)));
     });
     if (!folders.length) {
       treeEl.appendChild(h("div", { class: "kb-empty" }, "暂无分类，点右上 + 新建"));
     }
-    // 分类节点操作
-    folders.forEach(f => {
-      const row = el("[data-folder='" + CSS.escape(f.name) + "']", treeEl);
-      if (!row) return;
-      const rf = el("[data-rf='" + CSS.escape(f.name) + "']", row);
-      if (rf) rf.addEventListener("click", e => { e.stopPropagation(); renameFolder(f.name); });
-      const df = el("[data-df='" + CSS.escape(f.name) + "']", row);
-      if (df) df.addEventListener("click", e => { e.stopPropagation(); deleteFolder(f.name); });
-    });
 
     /* 中栏：标题 + 文档列表 */
     const head = el("[data-main-head]", view);

@@ -160,6 +160,9 @@ def is_risky(name: str, args: dict) -> bool:
         return True
     if name == "apply_patch":
         return True
+    # 覆盖知识库文档会丢掉原内容 → 走一次确认；新建/追加不用
+    if name == "knowledge_write" and (args or {}).get("mode") == "overwrite":
+        return True
     return False
 
 
@@ -196,7 +199,8 @@ def _tool_meta(name: str, t: dict, enabled: bool) -> dict:
 # 注册表：name -> { schema, run, icon, label }
 # ============================================================
 
-from . import ask_user, fetch_url, shell, time, websearch, editfile, apply_patch, calc, read_extra, knowledge_search
+from . import (ask_user, fetch_url, shell, time, websearch, editfile, apply_patch,
+               calc, read_extra, knowledge_search, knowledge_info, knowledge_write)
 
 
 TOOLS = {
@@ -263,12 +267,25 @@ TOOLS = {
         "icon": "book",
         "label": "知识库检索",
         "desc": "搜索知识库中与问题相关的资料片段"
+    },
+    "knowledge_info": {
+        "schema": knowledge_info.SCHEMA,
+        "run": knowledge_info.run,
+        "icon": "book",
+        "label": "知识库信息",
+        "desc": "查询知识库存放位置（绝对路径）与目录结构"
+    },
+    "knowledge_write": {
+        "schema": knowledge_write.SCHEMA,
+        "run": knowledge_write.run,
+        "icon": "book",
+        "label": "写入知识库",
+        "desc": "把内容真正写进知识库（新建 / 追加 / 覆盖文档）"
     }
 }
 
 
-TOOL_NAMES = {name for name, _ in TOOLS.items()
-}
+TOOL_NAMES = set(TOOLS.keys())
 
 
 def list_tools() -> list:

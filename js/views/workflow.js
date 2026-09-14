@@ -97,8 +97,8 @@
     const w = wf();
     if (!world || !w) return;
 
-    // edges
-    edgeSvg.innerHTML = "";
+    // edges（SVG 元素用循环清子节点，比 innerHTML="" 更稳）
+    while (edgeSvg.firstChild) edgeSvg.removeChild(edgeSvg.firstChild);
     w.edges.forEach(e => {
       const fromNode = w.nodes.find(n => n.id === e.from);
       const toNode = w.nodes.find(n => n.id === e.to);
@@ -139,7 +139,37 @@
   function modelLabel(node) {
     const list = JIGSAW.ModelService.list();
     const m = list.find(x => x.id === node.modelId);
-    return m ? m.id : (list.length ? node.modelId : "未配置");
+    return m ? m.name : (list.length ? "未选择模型" : "未配置模型");
+  }
+
+  /* ---------- 工具：一律用后端真实注册的工具，不再写死假名字 ---------- */
+  /** 真实工具列表（后端 /api/tools，ToolService 缓存） */
+  function realTools() { return JIGSAW.ToolService.list() || []; }
+
+  /** 工具的中文名（工具广场 / 气泡标签用的是同一份元数据） */
+  function toolMeta(name) { return JIGSAW.ToolService.getMeta(name); }
+  function toolLabel(name) {
+    const m = toolMeta(name);
+    return m ? (m.label || name) : name;      // 未注册的旧数据：原样显示
+  }
+  function toolIcon(name) {
+    const m = toolMeta(name);
+    return (m && m.icon) || "tool";
+  }
+  function isRealTool(name) { return !!toolMeta(name); }
+
+  /** 节点卡片上的工具标签行 */
+  function toolsRow(node) {
+    if (!node.tools || !node.tools.length) {
+      return h("div", { class: "wf-node-tools", "data-role": "tools" },
+        h("span", { class: "tool-none" }, "未分配工具"));
+    }
+    return h("div", { class: "wf-node-tools", "data-role": "tools" },
+      node.tools.map(t => h("span", { class: "tool-tag" + (isRealTool(t) ? "" : " unknown") },
+        h("span", { class: "tool-tag-ico" }, Icons.icon(toolIcon(t), 9)),
+        h("span", null, toolLabel(t))
+      ))
+    );
   }
 
   function statusClass(s) {
@@ -163,7 +193,7 @@
       h("div", { class: "wf-node-body" },
         h("div", { class: "wf-node-desc", "data-role": "desc" }, node.description || ""),
         h("div", { class: "wf-node-model", "data-role": "model" }, h("span", { class: "lbl" }, "MODEL "), modelLabel(node)),
-        h("div", { class: "wf-node-tools", "data-role": "tools" }, node.tools.map(t => h("span", { class: "tool-tag" }, t)))
+        toolsRow(node)
       ),
       h("div", { class: "wf-node-foot" },
         h("button", { class: "icon-btn", "data-del": "1", title: editable ? "删除节点" : "已锁定" },
@@ -189,12 +219,9 @@
     el("[data-role=desc]", nodeEl).textContent = node.description || "";
     el("[data-role=model]", nodeEl).innerHTML = `<span class="lbl">MODEL </span>` + modelLabel(node);
     const tools = el("[data-role=tools]", nodeEl);
-    tools.innerHTML = "";
-    node.tools.forEach(t => tools.appendChild(h("span", { class: "tool-tag" }, t)));
+    if (tools) tools.replaceWith(toolsRow(node));
     const del = el("[data-del]", nodeEl);
     del.title = editable ? "删除节点" : "已锁定";
-    // ports visibility by lock
-    els(".port", nodeEl).forEach(p => { });
   }
 
   function wireNode(nodeEl, node, w) {
@@ -234,6 +261,7 @@
       const temp = svg("path", { class: "wf-temp-edge", d: `M ${x1} ${y1} L ${x1 + 60} ${y1}` });
       edgeSvg.appendChild(temp);
       connectState = { fromId: node.id, temp, x1, y1 };
+      canvas.classList.add("connecting");   // 高亮所有可连的输入端口
       canvas.setPointerCapture(e.pointerId);
     });
   }
@@ -256,7 +284,6 @@
     }
 
     const editable = WF.isEditable(w, node.id);
-    const model = JIGSAW.ModelService.get(node.modelId);
 
     const field = (label, control, extra) => h("div", { class: "field" },
       h("div", { class: "field-label" }, label, extra || ""),
@@ -270,61 +297,57 @@
     JIGSAW.ModelService.populate(modelSel, node.modelId);
     if (!JIGSAW.ModelService.list().length) modelSel.disabled = true;
 
+    /*
+      工具区：只列后端真实注册的工具（ToolService ← /api/tools）。
+      以前这里是一个写死的假列表（web_search / code_interpreter / gdal …），
+      那些工具根本不存在，勾选了也没有任何实际效果。
+    */
     const toolsWrap = h("div", { class: "field-tools" });
+    const allTools = realTools();
 
-    // 自定义工具（不在预置列表里的 node.tools 条目）
-    const customTools = node.tools.filter(t => !AGENT_TOOL_ORDER.includes(t));
-    customTools.forEach(t => {
-      const tag = h("span", { class: "tool-tag custom" }, t);
-      if (editable) {
-        const rm = h("button", { type: "button", class: "tool-rm", title: "移除工具" }, Icons.icon("x", 9));
-        rm.addEventListener("click", () => {
-          WF.updateNode(w.id, node.id, { tools: node.tools.filter(x => x !== t) });
+    const refreshTools = () => {
+      toolsWrap.innerHTML = "";
+      if (!allTools.length) {
+        toolsWrap.appendChild(h("div", { class: "tool-none" },
+          JIGSAW.Http.isRemote() ? "正在读取工具列表…" : "本地 Mock 模式下无工具（切到「后端 API」可见）"));
+        return;
+      }
+      allTools.forEach(t => {
+        const on = node.tools.includes(t.name);
+        const chip = h("button", {
+          type: "button",
+          class: "tool-check" + (on ? " on" : "") + (t.enabled === false ? " off" : ""),
+          disabled: editable ? null : true,
+          title: t.description || t.name,
+          "data-tool": t.name
+        }, Icons.icon(t.icon || "tool", 11), h("span", null, t.label || t.name));
+        if (editable) chip.addEventListener("click", () => {
+          const idx = node.tools.indexOf(t.name);
+          if (idx >= 0) node.tools.splice(idx, 1); else node.tools.push(t.name);
+          WF.updateNode(w.id, node.id, { tools: node.tools.slice() });
+          chip.classList.toggle("on", node.tools.includes(t.name));
           renderWorkflow();
         });
-        tag.appendChild(rm);
-      }
-      toolsWrap.appendChild(tag);
-    });
-
-    // 预置工具开关
-    AGENT_TOOL_ORDER.forEach(t => {
-      const on = node.tools.includes(t);
-      const chip = h("button", { type: "button", class: "tool-check" + (on ? " on" : ""), disabled: editable ? null : true, "data-tool": t }, t);
-      if (editable) chip.addEventListener("click", () => {
-        const idx = node.tools.indexOf(t);
-        if (idx >= 0) node.tools.splice(idx, 1); else node.tools.push(t);
-        WF.updateNode(w.id, node.id, { tools: node.tools.slice() });
-        chip.classList.toggle("on", node.tools.includes(t));
-        renderWorkflow();
+        toolsWrap.appendChild(chip);
       });
-      toolsWrap.appendChild(chip);
-    });
 
-    // 添加自定义工具
-    if (editable) {
-      const add = h("button", { type: "button", class: "tool-add", title: "添加自定义工具" }, Icons.icon("plus-sm", 12));
-      add.addEventListener("click", () => {
-        const inp = h("input", { class: "tool-input", placeholder: "工具名，回车添加", value: "" });
-        const commit = () => {
-          const v = inp.value.trim();
-          if (v && !node.tools.includes(v)) {
-            WF.updateNode(w.id, node.id, { tools: [...node.tools, v] });
+      // 旧数据里残留的、后端已不存在的工具名：单独列出来，方便移除
+      const ghosts = node.tools.filter(t => !isRealTool(t));
+      ghosts.forEach(t => {
+        const tag = h("span", { class: "tool-tag custom unknown", title: "后端已无此工具，点 × 移除" }, t);
+        if (editable) {
+          const rm = h("button", { type: "button", class: "tool-rm", title: "移除" }, Icons.icon("x", 9));
+          rm.addEventListener("click", () => {
+            WF.updateNode(w.id, node.id, { tools: node.tools.filter(x => x !== t) });
             renderWorkflow();
-          }
-          inp.remove();
-          toolsWrap.appendChild(add);
-        };
-        inp.addEventListener("keydown", e => {
-          if (e.key === "Enter") commit();
-          else if (e.key === "Escape") { inp.remove(); toolsWrap.appendChild(add); }
-        });
-        add.remove();
-        toolsWrap.appendChild(inp);
-        inp.focus();
+            refreshTools();
+          });
+          tag.appendChild(rm);
+        }
+        toolsWrap.appendChild(tag);
       });
-      toolsWrap.appendChild(add);
-    }
+    };
+    refreshTools();
 
     const ioBox = v => h("div", { class: "io-box" }, v || "—");
 
@@ -553,27 +576,33 @@
         const { fromId, temp } = connectState;
         temp.remove();
         connectState = null;
+        canvas.classList.remove("connecting");
+        // 命中判定放宽：落在输入端口上算数，落在节点任意位置也算数
+        // （端口只有 11px，严格只认端口的话用户基本连不中）
         const target = document.elementFromPoint(e.clientX, e.clientY);
-        const portIn = target && target.closest ? target.closest(".port.in") : null;
-        if (portIn) {
-          const toNode = portIn.closest(".wf-node");
-          if (toNode) {
-            const toId = toNode.dataset.id;
-            const w = wf();
-            const ok = WF.addEdge(w.id, fromId, toId);
-            if (ok) {
-              JIGSAW.Toast.show("已添加连线");
+        const hit = target && target.closest
+          ? (target.closest(".port.in") || target.closest(".wf-node"))
+          : null;
+        const toNode = hit ? hit.closest(".wf-node") : null;
+        if (toNode) {
+          const toId = toNode.dataset.id;
+          const w = wf();
+          const ok = WF.addEdge(w.id, fromId, toId);
+          if (ok) {
+            JIGSAW.Toast.show("已添加连线");
+            renderWorkflow();     // 立刻重画，不用等 store 通知
+          } else if (toId === fromId) {
+            JIGSAW.Toast.show("不能连自己");
+          } else {
+            // 给明确的失败原因，而不是静默失败
+            if (w.running) {
+              JIGSAW.Toast.show("运行中不可修改画布，请先停止");
+            } else if (!WF.isEditable(w, fromId) || !WF.isEditable(w, toId)) {
+              JIGSAW.Toast.show("节点已锁定，点「重置」解锁后可连线");
+            } else if (w.edges.some(ed => ed.from === fromId && ed.to === toId)) {
+              JIGSAW.Toast.show("该连线已存在");
             } else {
-              // 给明确的失败原因，而不是静默失败
-              if (w.running) {
-                JIGSAW.Toast.show("运行中不可修改画布，请先停止");
-              } else if (!WF.isEditable(w, fromId) || !WF.isEditable(w, toId)) {
-                JIGSAW.Toast.show("节点已锁定，点「重置」解锁后可连线");
-              } else if (w.edges.some(ed => ed.from === fromId && ed.to === toId)) {
-                JIGSAW.Toast.show("该连线已存在");
-              } else {
-                JIGSAW.Toast.show("无法连线：会形成循环依赖");
-              }
+              JIGSAW.Toast.show("无法连线：会形成循环依赖");
             }
           }
         }
@@ -634,7 +663,10 @@
       const topbar = h("div", { class: "topbar wf-topbar" });
       canvas = h("div", { class: "wf-canvas" });
       world = h("div", { class: "wf-world" });
-      edgeSvg = h("svg", { class: "wf-svg", width: "20000", height: "20000" });
+      // ★ 必须用 svg()（createElementNS）而不是 h()（createElement）：
+      //   document.createElement("svg") 造出来的是 HTMLUnknownElement，
+      //   不是真正的 SVG 根元素，里面的 <path> 永远画不出来 —— 连线"一直不显示"就这个原因。
+      edgeSvg = svg("svg", { class: "wf-svg", width: "20000", height: "20000" });
       world.appendChild(edgeSvg);
       canvas.append(world,
         h("div", { class: "wf-controls" }),
@@ -663,6 +695,13 @@
       renderWorkflow();
       renderInspector();
       fitView();
+
+      // 工具列表来自后端：缓存为空（后端当时没起）时补拉一次，拉到后重渲染
+      if (JIGSAW.Http.isRemote() && JIGSAW.ToolService.list().length === 0) {
+        JIGSAW.ToolService.load()
+          .then(() => { renderWorkflow(); renderInspector(); })
+          .catch(() => {});
+      }
 
       wireCanvas();
       window.addEventListener("keydown", onKey);
@@ -693,8 +732,6 @@
       heights.clear();
     }
   };
-
-  const AGENT_TOOL_ORDER = ["web_search", "fetch_url", "read_doc", "code_interpreter", "data_frame", "math", "editor", "style_check", "review", "merge", "file_ingest", "api_fetch", "catalog", "gdal", "rasterio", "shapely", "renderer", "style_lib"];
 
   JIGSAW.Views = JIGSAW.Views || {};
   JIGSAW.Views.Workflow = Workflow;

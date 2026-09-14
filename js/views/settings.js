@@ -293,7 +293,7 @@
     const missing = JIGSAW.Http.isRemote() && !TS.hasStats();
     const sinceLine = missing
       ? "未获取到统计 —— 请重启后端（本次更新新增了 /api/stats 接口）。"
-      : "该统计自 " + TS.sinceText() + " 开始记录。";
+      : "该统计自 " + TS.sinceText() + " 开始记录（每 3 秒自动刷新）。";
 
     return [
       h("div", { class: "settings-section-title" }, "统计"),
@@ -341,8 +341,9 @@
   const RENDERERS = { general: sectionGeneral, appearance: sectionAppearance, model: sectionModel, api: sectionApi, workflow: sectionWorkflow, stats: sectionStats, about: sectionAbout };
 
   /* ---- 视图 ---- */
-  function renderContent() {
+  function renderContent(keepScroll) {
     const s = Store.get().settings;
+    const scrollTop = contentEl.scrollTop;   // 自动刷新时别把用户滚动位置重置掉
     contentEl.innerHTML = "";
     const inner = h("div", { class: "settings-inner" });
     RENDERERS[current](s).forEach(n => inner.appendChild(n));
@@ -353,10 +354,34 @@
       e.preventDefault();
       JIGSAW.Toast.show("占位链接 —— 本地构建");
     }));
-    els('[data-del-cm]', contentEl).forEach(b => b.addEventListener("click", () => {
+    els('[data-del-cm]', contentEl).forEach(b => b.addEventListener("click", async () => {
+      const m = (Store.get().settings.model.custom || []).find(x => x.id === b.dataset.delCm);
+      const ok = await JIGSAW.PromptModal.confirm({
+        title: "删除模型",
+        message: `删除模型「${m ? m.name : b.dataset.delCm}」？已用它开的会话会回退到其他模型。`,
+        okText: "删除",
+        danger: true
+      });
+      if (!ok) return;
       JIGSAW.ModelService.removeCustom(b.dataset.delCm);
       JIGSAW.Toast.show("已删除自定义模型");
     }));
+
+    if (keepScroll) contentEl.scrollTop = scrollTop;
+  }
+
+  /* 统计页自动刷新：以前只在进入页面时拉一次，工具调用后数字永远是旧的 */
+  let statsTimer = null;
+  function startStatsPolling() {
+    stopStatsPolling();
+    if (!JIGSAW.Http.isRemote()) return;
+    statsTimer = setInterval(() => {
+      if (current !== "stats") { stopStatsPolling(); return; }
+      JIGSAW.ToolService.loadStats().catch(() => {});   // 拿到新数据会广播 "stats"
+    }, 3000);
+  }
+  function stopStatsPolling() {
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
   }
 
   const Settings = {
@@ -378,8 +403,13 @@
           current = sec.id;
           els(".settings-nav-item", nav).forEach(x => x.classList.toggle("active", x.dataset.sec === current));
           renderContent();
-          // 统计页：先渲染缓存，再从后端拉一次最新统计并刷新
-          if (sec.id === "stats") JIGSAW.ToolService.loadStats().then(renderContent).catch(() => {});
+          // 统计页：先渲染缓存，再拉一次最新统计，并开始 3 秒自动刷新
+          if (sec.id === "stats") {
+            JIGSAW.ToolService.loadStats().then(() => renderContent()).catch(() => {});
+            startStatsPolling();
+          } else {
+            stopStatsPolling();
+          }
         });
         nav.appendChild(item);
       });
@@ -393,12 +423,20 @@
       el("[data-back-s]", root).addEventListener("click", () => JIGSAW.Router.goBack());
 
       unsubs.push(Store.subscribe("settings", renderContent));
+      // 统计有更新（工具被调用 / 任务完成）→ 正在看统计页就立刻重画
+      unsubs.push(Store.subscribe("stats", () => {
+        if (current === "stats") renderContent(true);
+      }));
 
-      // 直接落在统计页时，也先拉一次最新统计
-      if (current === "stats") JIGSAW.ToolService.loadStats().then(renderContent).catch(() => {});
+      // 直接落在统计页时：拉一次并开启自动刷新
+      if (current === "stats") {
+        JIGSAW.ToolService.loadStats().then(() => renderContent()).catch(() => {});
+        startStatsPolling();
+      }
     },
 
     unmount() {
+      stopStatsPolling();
       unsubs.forEach(u => u());
       unsubs = [];
     }

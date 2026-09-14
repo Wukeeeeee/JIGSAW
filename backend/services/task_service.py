@@ -1,14 +1,17 @@
 """
-JIGSAW — 异步任务队列（单 Worker 串行）
+JIGSAW — 异步任务队列（多 Worker 并发）
 ========================================
 把"发消息 → 等 LLM 回复"改成异步任务：
   1. POST /api/chat/messages 只创建任务、立即返回 task_id（不等处理）
-  2. 后台 Worker 按队列顺序一条条处理（一次只处理一条，绝不并行）
+  2. 后台 N 个 Worker 并发处理（不同会话 / 不同模型互不等待）
   3. 前端轮询 GET /api/chat/tasks/{task_id} 拿状态，实时看到：
       排队中（第 N 位）→ 处理中（正在调用 网页搜索…）→ 完成
 
-以后要"多个并发"：把 _WORKERS 从 1 改成 N 即可，其余不用动。
+同一会话内部仍然串行（前端按会话排队），跨会话/跨模型并行。
+并发数在 data/task_workers.json 里可改（没有就用 _DEFAULT_WORKERS）。
 """
+import json
+import os
 import threading
 import time
 import uuid
@@ -17,15 +20,46 @@ from datetime import datetime, timezone
 from services import chat_service
 from services.store import store
 
-_WORKERS = 1          # 并发 Worker 数：现在是单任务串行，以后要并发改成 >1
-_lock = threading.Lock()          # 保护 TASKS / QUEUE / _current_task_id
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_WORKERS_FILE = os.path.join(_DATA_DIR, "task_workers.json")
+
+_DEFAULT_WORKERS = 4              # 默认并发 Worker 数（同时跑几个任务）
+_MIN_WORKERS, _MAX_WORKERS = 1, 16
+
+_lock = threading.Lock()          # 保护 TASKS / QUEUE / _thread_task
 TASKS = {}                        # task_id -> 任务 dict
-QUEUE = []                        # task_id 顺序队列（FIFO）
-_current_task_id = None           # 当前 Worker 正在处理的任务 id（单 worker 足够）
+QUEUE = []                        # task_id 顺序队列（FIFO，只放"待处理"的任务）
+# Worker 线程 -> 它正在处理的 task_id（多 Worker 下不能再用一个全局变量）
+_thread_task: dict[int, str] = {}
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def worker_count() -> int:
+    """当前并发 Worker 数（读 data/task_workers.json，缺省用默认值）。"""
+    try:
+        with open(_WORKERS_FILE, encoding="utf-8") as f:
+            n = int(json.load(f).get("workers", _DEFAULT_WORKERS))
+        return max(_MIN_WORKERS, min(_MAX_WORKERS, n))
+    except Exception:
+        return _DEFAULT_WORKERS
+
+
+def set_worker_count(n: int) -> int:
+    """写入并发数（不改变已启动的 Worker 数，下次启动后端生效）。"""
+    try:
+        n = max(_MIN_WORKERS, min(_MAX_WORKERS, int(n)))
+    except Exception:
+        n = _DEFAULT_WORKERS
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        with open(_WORKERS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"workers": n}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return n
 
 
 def create_task(conversation_id: str, message: str,
@@ -40,7 +74,7 @@ def create_task(conversation_id: str, message: str,
             "model": model,
             "temperature": temperature,
             "status": "pending",      # pending(排队) → running(处理中) → done / failed
-            "queue_position": len(QUEUE),
+            "queue_position": len(QUEUE) + 1,
             "activity": None,         # 实时进度文案，如 "正在调用 网页搜索（关岛签证）"
             "pendingQuestion": None,  # 待用户回答的问题（AskUser 工具用，非空时前端弹窗）
             "pendingRisk": False,     # 该弹窗是否是"风险确认"（是则显示不再提醒勾选框）
@@ -64,7 +98,8 @@ def get_task(task_id: str) -> dict | None:
         if task is None:
             return None
         copy = dict(task)
-        copy["queue_position"] = QUEUE.index(task_id) if task_id in QUEUE else 0
+        # QUEUE 里只放 pending：位置从 1 开始数（第 1 位 = 下一个就轮到）
+        copy["queue_position"] = (QUEUE.index(task_id) + 1) if task_id in QUEUE else 0
         return copy
 
 
@@ -72,13 +107,20 @@ def set_activity(text: str) -> None:
     """更新"当前正在处理"任务的进度文案。
 
     由 chat_service 在工具循环里调用（如"正在调用 网页搜索（xxx）"）。
-    单 worker 场景：直接改 _current_task_id 指向的任务。
+    多 Worker：按调用者所在线程找到它正在跑的那个任务，各写各的。
     """
-    global _current_task_id
+    tid = _thread_task.get(threading.get_ident())
+    if not tid:
+        return
     with _lock:
-        tid = _current_task_id
-        if tid and tid in TASKS:
+        if tid in TASKS:
             TASKS[tid]["activity"] = text
+
+
+def running_count() -> int:
+    """当前正在处理中的任务数（并发占用情况）。"""
+    with _lock:
+        return sum(1 for t in TASKS.values() if t["status"] == "running")
 
 
 def set_pending_question(task_id: str, question: str, risk: bool = False,
@@ -153,7 +195,7 @@ def list_active_tasks() -> list:
                 "message": (task["message"] or "")[:60],
                 "messageFull": task["message"] or "",   # 完整内容（队列面板展开查看用）
                 "status": task["status"],
-                "queue_position": QUEUE.index(tid) if tid in QUEUE else 0,
+                "queue_position": (QUEUE.index(tid) + 1) if tid in QUEUE else 0,
                 "activity": task.get("activity"),
                 "pendingQuestion": task.get("pendingQuestion"),
                 "pendingRisk": bool(task.get("pendingRisk")),
@@ -174,27 +216,39 @@ def is_cancelled(task_id: str | None) -> bool:
         return bool(t and t["status"] == "cancelled")
 
 
-def _worker() -> None:
-    """单 Worker 循环：从队列头取 pending 任务，串行处理。"""
-    global _current_task_id
-    while True:
-        task_id = None
-        with _lock:
-            for tid in QUEUE:
-                if TASKS[tid]["status"] == "pending":
-                    task_id = tid
-                    break
+def _claim_task() -> str | None:
+    """原子领取一个 pending 任务：取下并标记 running。
 
+    多 Worker 同时扫队列会抢到同一个任务 → 必须在同一把锁里完成
+    "找到 + 改状态 + 移出队列"，否则两个 Worker 会重复处理同一条消息。
+    """
+    with _lock:
+        for tid in list(QUEUE):
+            task = TASKS.get(tid)
+            if task and task["status"] == "pending":
+                task["status"] = "running"
+                task["startedAt"] = _now_iso()
+                task["activity"] = "思考中…"
+                QUEUE.remove(tid)
+                _thread_task[threading.get_ident()] = tid
+                return tid
+        return None
+
+
+def _worker() -> None:
+    """Worker 循环：领一个 pending 任务 → 处理 → 再领下一个。
+
+    多个 Worker 同时跑 → 不同会话 / 不同模型的任务互不等待。
+    同一会话内部的串行由前端保证（前端按会话排队，一次只发一条）。
+    """
+    while True:
+        task_id = _claim_task()
         if task_id is None:
-            time.sleep(0.5)
+            time.sleep(0.3)
             continue
 
         with _lock:
-            _current_task_id = task_id
             task = TASKS[task_id]
-            task["status"] = "running"
-            task["startedAt"] = _now_iso()
-            task["activity"] = "思考中…"
             conv_id = task["conversation_id"]
             message = task["message"]
             model = task["model"]
@@ -246,17 +300,19 @@ def _worker() -> None:
                     task["finishedAt"] = _now_iso()
         finally:
             with _lock:
-                _current_task_id = None
-                if task_id in QUEUE:
+                _thread_task.pop(threading.get_ident(), None)
+                if task_id in QUEUE:      # 兜底：理论上领取时就已移出
                     QUEUE.remove(task_id)
 
 
 def start_worker() -> None:
-    """启动后台 Worker（幂等，重复调用不会起重复线程）。"""
+    """启动后台 Worker 池（幂等，重复调用不会起重复线程）。"""
     started = getattr(start_worker, "_started", False)
     if started:
         return
     start_worker._started = True
-    for _ in range(_WORKERS):
-        t = threading.Thread(target=_worker, daemon=True, name="jigsaw-task-worker")
+    n = worker_count()
+    for i in range(n):
+        t = threading.Thread(target=_worker, daemon=True, name=f"jigsaw-task-worker-{i + 1}")
         t.start()
+    print(f"[task_service] 已启动 {n} 个并发 Worker（可在 data/task_workers.json 调整）")

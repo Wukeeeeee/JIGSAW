@@ -13,49 +13,53 @@
     { id: "jigsaw-mini",  name: "JIGSAW Mini",  desc: "低延迟，适合快速任务", context: 64000, vision: false, tools: false }
   ];
 
-  /* Agent 模板 —— 用于实例化工作流节点 */
+  /* Agent 模板 —— 用于实例化工作流节点
+     ★ tools 必须是后端 tools/ 里真实注册的工具 id（后端 /api/tools 会返回同一批：
+       get_current_time / websearch / fetch_url / shell / AskUser / editfile /
+       apply_patch / calc / read_extra / knowledge_search / knowledge_info）。
+       不要写不存在的工具名——勾了也不会有任何效果。 */
   const AGENTS = {
     research: {
       type: "research", name: "研究 Agent", icon: "globe",
-      desc: "检索网络与内部资料，为任务收集有据可依的素材。",
-      defaultModel: "jigsaw-ultra", tools: ["web_search", "fetch_url", "read_doc"],
+      desc: "检索网络与本地知识库，为任务收集有据可依的素材。",
+      defaultModel: "jigsaw-ultra", tools: ["websearch", "fetch_url", "knowledge_search", "read_extra"],
       systemPrompt: "你是一名研究专员。围绕用户任务收集真实、有来源的事实材料，输出结构化简报，附关键发现与来源链接。"
     },
     analysis: {
       type: "analysis", name: "分析 Agent", icon: "cpu",
       desc: "分析已收集的数据，提炼规律并产出结构化结论。",
-      defaultModel: "jigsaw-ultra", tools: ["code_interpreter", "data_frame", "math"],
+      defaultModel: "jigsaw-ultra", tools: ["calc", "read_extra", "shell"],
       systemPrompt: "你是一名分析专员。把原始素材整理成清晰、结构化的洞察，优先使用表格与量化摘要。"
     },
     writer: {
       type: "writer", name: "写作 Agent", icon: "edit",
       desc: "把分析结果写成条理清晰的最终文稿。",
-      defaultModel: "jigsaw-rapid", tools: ["editor", "style_check"],
+      defaultModel: "jigsaw-rapid", tools: ["editfile", "apply_patch"],
       systemPrompt: "你是一名写作专员。基于分析结果撰写结构清晰、措辞专业的最终回复，语气贴近资深分析师。"
     },
     final: {
       type: "final", name: "终审 Agent", icon: "check",
       desc: "复核、合并各环节结果，向用户交付最终答案。",
-      defaultModel: "jigsaw-rapid", tools: ["review", "merge"],
+      defaultModel: "jigsaw-rapid", tools: ["read_extra", "knowledge_search"],
       systemPrompt: "你是终审环节。合并草稿、核对完整性，以恰当的排版向用户交付最终答案。"
     },
     gisCollect: {
       type: "gisCollect", name: "数据采集 Agent", icon: "layers",
-      desc: "获取 GIS 数据源：栅格、矢量与在线图层。",
-      defaultModel: "jigsaw-rapid", tools: ["file_ingest", "api_fetch", "catalog"],
-      systemPrompt: "你是 GIS 数据工程师。负责采集并校验任务所需的全部地理空间数据集。"
+      desc: "获取数据源：在线图层、本地文件与知识库资料。",
+      defaultModel: "jigsaw-rapid", tools: ["fetch_url", "shell", "read_extra"],
+      systemPrompt: "你是数据工程师。负责采集并校验任务所需的全部数据集。"
     },
     gisProcess: {
       type: "gisProcess", name: "数据加工 Agent", icon: "terminal",
-      desc: "对原始地理数据做投影转换、裁剪与清洗。",
-      defaultModel: "jigsaw-rapid", tools: ["gdal", "rasterio", "shapely"],
-      systemPrompt: "你是地理空间处理专家。正确处理坐标系，完成投影转换、裁剪与数据清洗。"
+      desc: "对原始数据做转换、裁剪与清洗。",
+      defaultModel: "jigsaw-rapid", tools: ["shell", "calc", "apply_patch"],
+      systemPrompt: "你是数据处理专家。正确使用工具完成格式转换、裁剪与数据清洗。"
     },
     gisMap: {
       type: "gisMap", name: "制图 Agent", icon: "bolt",
-      desc: "产出制图成品与最终可视化交付物。",
-      defaultModel: "jigsaw-ultra", tools: ["renderer", "style_lib"],
-      systemPrompt: "你是制图师。使用恰当的符号体系，产出清晰、易读的地图交付物。"
+      desc: "产出成品文件与最终交付物。",
+      defaultModel: "jigsaw-ultra", tools: ["editfile", "apply_patch", "get_current_time"],
+      systemPrompt: "你是交付负责人。产出清晰、易读的最终交付物。"
     }
   };
 

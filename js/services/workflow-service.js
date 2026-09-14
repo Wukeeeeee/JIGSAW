@@ -44,9 +44,12 @@
       if (!wf || wf.running) return null;
       const a = AGENTS[agentType] || AGENTS.research;
       const id = uid(wfId + "-n");
+      // 模板里的 defaultModel 是占位的假 id（jigsaw-ultra 之类），
+      // 新建节点直接用当前实际可用的模型，省得每个节点都显示"未选择模型"
+      const active = JIGSAW.ModelService.getActive();
       const node = {
         id, agentType: a.type, name: a.name, icon: a.icon,
-        description: a.desc, modelId: a.defaultModel,
+        description: a.desc, modelId: (active && active.id) || a.defaultModel,
         systemPrompt: a.systemPrompt, tools: a.tools.slice(),
         input: "", output: "", status: "waiting", x, y
       };

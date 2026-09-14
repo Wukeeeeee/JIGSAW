@@ -156,6 +156,17 @@
     renderDetail();
   }
 
+  /* 调用统计会随工具调用变化：停在工具页时也周期性刷新详情面板的数字 */
+  let statsTimer = null;
+  function startStatsPolling() {
+    stopStatsPolling();
+    if (!JIGSAW.Http.isRemote()) return;
+    statsTimer = setInterval(() => JIGSAW.ToolService.loadStats().catch(() => {}), 5000);
+  }
+  function stopStatsPolling() {
+    if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  }
+
   const Tools = {
     mount(c) {
       container = c;
@@ -193,6 +204,17 @@
 
       el("[data-back]", container).addEventListener("click", () => JIGSAW.Router.goBack());
       this.refresh();
+
+      // 统计更新 → 只重画右侧详情面板的数字（不重建左侧列表，避免打断操作）
+      this.__unsubStats = JIGSAW.Store.subscribe("stats", () => { if (container && container.isConnected) renderDetail(); });
+      startStatsPolling();
+    },
+
+    unmount() {
+      stopStatsPolling();
+      if (this.__unsubStats) { this.__unsubStats(); this.__unsubStats = null; }
+      container = null;
+      selected = null;
     },
 
     async refresh() {
@@ -222,18 +244,22 @@
         master.classList.toggle("off", !JIGSAW.ToolService.isEnabled());
         const tog = el(".toggle", master);
         tog.classList.toggle("on", JIGSAW.ToolService.isEnabled());
-        tog.addEventListener("click", async () => {
-          const next = !JIGSAW.ToolService.isEnabled();
-          tog.classList.toggle("on", next);
-          master.classList.toggle("off", !next);
-          try {
-            await JIGSAW.ToolService.setEnabled(next);
-          } catch (e) {
-            tog.classList.toggle("on", !next);
-            master.classList.toggle("off", next);
-            JIGSAW.Toast.show("切换失败：" + (e.message || ""));
-          }
-        });
+        // refresh() 可能被多次调用：绑过就不再绑，否则点一次开关会发好几个请求
+        if (master.dataset.bound !== "1") {
+          master.dataset.bound = "1";
+          tog.addEventListener("click", async () => {
+            const next = !JIGSAW.ToolService.isEnabled();
+            tog.classList.toggle("on", next);
+            master.classList.toggle("off", !next);
+            try {
+              await JIGSAW.ToolService.setEnabled(next);
+            } catch (e) {
+              tog.classList.toggle("on", !next);
+              master.classList.toggle("off", next);
+              JIGSAW.Toast.show("切换失败：" + (e.message || ""));
+            }
+          });
+        }
       }
 
       // "不再提醒"状态同步到风险提醒开关（勾选过 → 打开）
@@ -242,19 +268,22 @@
         const tog = el(".toggle", riskBox);
         tog.classList.toggle("on", JIGSAW.ToolService.riskAck());
         riskBox.classList.toggle("off", !JIGSAW.ToolService.riskAck());
-        tog.addEventListener("click", async () => {
-          const next = !JIGSAW.ToolService.riskAck();
-          tog.classList.toggle("on", next);
-          riskBox.classList.toggle("off", !next);
-          try {
-            await JIGSAW.ToolService.setRiskAck(next);
-            JIGSAW.Toast.show(next ? "已开启：风险操作不再提醒" : "已恢复：风险操作每次提醒");
-          } catch (e) {
-            tog.classList.toggle("on", !next);
-            riskBox.classList.toggle("off", next);
-            JIGSAW.Toast.show("设置失败：" + (e.message || ""));
-          }
-        });
+        if (riskBox.dataset.bound !== "1") {   // 同上：只绑一次
+          riskBox.dataset.bound = "1";
+          tog.addEventListener("click", async () => {
+            const next = !JIGSAW.ToolService.riskAck();
+            tog.classList.toggle("on", next);
+            riskBox.classList.toggle("off", !next);
+            try {
+              await JIGSAW.ToolService.setRiskAck(next);
+              JIGSAW.Toast.show(next ? "已开启：风险操作不再提醒" : "已恢复：风险操作每次提醒");
+            } catch (e) {
+              tog.classList.toggle("on", !next);
+              riskBox.classList.toggle("off", next);
+              JIGSAW.Toast.show("设置失败：" + (e.message || ""));
+            }
+          });
+        }
       }
 
       render();

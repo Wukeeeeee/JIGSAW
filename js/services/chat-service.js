@@ -96,18 +96,25 @@
     },
 
     /**
-     * ============ 消息队列（类似 Grok）：一次只发一条，多发的排队依次执行 ============
-     * 正在回复时再发消息，不会并行：进队列等当前这条完成后自动接着发。
+     * ============ 消息队列（按会话隔离，跨会话并行） ============
+     * - 同一个会话：正在回复时再发 → 排队，等当前这条完成后自动接着发（一次只跑一条）。
+     * - 不同会话 / 不同模型：各跑各的，互不等待（后端也是并发 Worker）。
+     *   以前用全局 _busy，导致"另一个会话还在跑，这边发消息就只能干等"。
      */
-    _busy: false,
-    _queue: [],        // [{ convId, text, opts }]
-    _activeTaskId: null,   // 当前正在处理后端任务的 task_id（终止按钮用）
-    _startedAt: null,  // 当前正在处理这条的开始时间（毫秒）
+    _active: new Map(),    // convId -> { startedAt, taskId, cancel() }
+    _queue: [],            // [{ id, convId, text, opts, placeholder }]
+    _startedAt: null,      // 最近一次开始的时间（兼容旧调用）
 
-    /** 队列状态：busy=正在回复；pending=还有几条排队；startedAt=当前这条开始时间 */
+    /** 队列状态：busy=有任务在跑；pending=还有几条排队；active=正在跑几个会话 */
     queueInfo() {
-      return { busy: this._busy, pending: this._queue.length, startedAt: this._startedAt };
+      const active = this._active.size;
+      let startedAt = null;
+      this._active.forEach(r => { if (startedAt === null || r.startedAt < startedAt) startedAt = r.startedAt; });
+      return { busy: active > 0, pending: this._queue.length, active, startedAt: startedAt };
     },
+
+    /** 某个会话是否正在回复 */
+    isBusy(convId) { return this._active.has(convId); },
 
     _syncQueue() { Store.notify("queue"); },
 
@@ -147,23 +154,36 @@
       return true;
     },
 
-    /** 终止当前正在处理的任务（空闲时空操作；实际逻辑由 _doSend 按本条任务覆盖） */
-    cancel() { return Promise.resolve(); },
+    /**
+     * 终止：cancel(convId) 停指定会话；不传 convId 时停当前唯一/最早的那条。
+     * 实际收尾逻辑由 _doSend 为每条任务单独塞进 _active 记录里。
+     */
+    cancel(convId) {
+      let rec = convId ? this._active.get(convId) : null;
+      if (!rec) {   // 没指定 → 取最早开始的那条
+        this._active.forEach(r => { if (!rec || r.startedAt < rec.startedAt) rec = r; });
+      }
+      if (!rec || typeof rec.cancel !== "function") return Promise.resolve();
+      return rec.cancel();
+    },
 
     _shift() {
-      // 当前空闲且队列里有消息 → 取出下一条发送（带上排队时的占位消息，避免闪烁）
-      if (this._busy || !this._queue.length) { this._syncQueue(); return; }
-      const next = this._queue.shift();
+      // 找一个"所属会话当前空闲"的排队消息发出去 → 不同会话可同时跑
+      if (!this._queue.length) { this._syncQueue(); return; }
+      const i = this._queue.findIndex(q => !this._active.has(q.convId));
+      if (i < 0) { this._syncQueue(); return; }
+      const next = this._queue.splice(i, 1)[0];
       this._doSend(next.convId, next.text, next.opts, next.placeholder);
     },
 
     /**
      * send(convId, text, { onDone }) → 发送一条消息
-     * 正在回复时调用 → 自动排队（返回 null），完成后接着发，绝不并行。
+     * 该会话正在回复时调用 → 自动排队（返回 null），完成后接着发。
+     * 别的会话在跑不影响本条 —— 各自独立。
      * 排队时也立即把"你的消息 + 排队中"显示出来，避免发出去毫无反应。
      */
     send(convId, text, opts) {
-      if (this._busy) {
+      if (this._active.has(convId)) {
         const item = { id: uid("q"), convId, text, opts: opts || {} };
         item.placeholder = this._appendPlaceholder(convId, text);
         this._queue.push(item);
@@ -191,8 +211,10 @@
     _doSend(convId, text, opts, placeholder) {
       const conv = this.get(convId);
       if (!conv) return null;
-      this._busy = true;
-      this._startedAt = Date.now();
+      // 本条任务登记进"进行中"集合（按会话隔离：别的会话不受影响）
+      const rec = { startedAt: Date.now(), taskId: null, cancel: null };
+      this._active.set(convId, rec);
+      this._startedAt = rec.startedAt;
 
       // 当前会话用的模型对象（设置 → 模型 里添加的自定义模型）
       const model = JIGSAW.ModelService.forConversation(convId);
@@ -215,12 +237,15 @@
       this.touch(convId);
       Store.notify("messages");
 
-      // 本条完成后：回调 → 释放 busy → 接着发下一条排队消息
+      // 本条完成后：回调 → 从"进行中"移除 → 接着发下一条排队消息
       const done = (asstMsg) => {
-        if (this._activeTaskId) this._activeTaskId = null;
+        this._active.delete(convId);
+        if (this._active.size === 0) this._startedAt = null;
+        // 这一轮可能用过工具 → 顺手刷新统计（设置 → 统计 / 工具详情页的数字才跟得上）
+        if (JIGSAW.Http.isRemote() && JIGSAW.ToolService) {
+          JIGSAW.ToolService.loadStats().catch(() => {});
+        }
         if (opts && opts.onDone) opts.onDone(asstMsg);
-        this._busy = false;
-        this._startedAt = null;
         this._syncQueue();
         this._shift();
       };
@@ -247,7 +272,7 @@
        * 即使还没拿到后端 task_id（Http.chat 尚未返回），也先在前端收尾并释放队列，
        * 等 task_id 到手再补一次后端终止 —— 保证"点了终止就有反应"，不会好像没生效。
        */
-      this.cancel = () => {
+      rec.cancel = () => {
         if (settled) return Promise.resolve();
         cancelled = true;
         const p = localTaskId
@@ -286,18 +311,18 @@
             const taskId = res.task_id;
             if (!taskId) { settle("后端未返回任务编号：" + (res.message || "")); return; }
             localTaskId = taskId;
+            rec.taskId = taskId;
             if (cancelled || settled) {
               // 拿到 task_id 之前就被终止了 → 补一次后端终止，不再接管 UI
               JIGSAW.Http.cancelTask(taskId).catch(e => console.warn("终止失败", e));
               return;
             }
-            this._activeTaskId = taskId;    // 终止按钮要用的任务 id
 
             // ★ 等待时长本地连续计时：每秒刷新一次（不依赖 2s 轮询，显示平滑）
             let statusText = "";   // 轮询写基准文案（排队中/思考中/…）
             const applyWait = () => {
               if (settled || asstMsg.status !== "streaming") return;
-              const waitSec = Math.floor((Date.now() - this._startedAt) / 1000);
+              const waitSec = Math.floor((Date.now() - rec.startedAt) / 1000);
               asstMsg.text = statusText + (waitSec > 5 ? `（已等待 ${waitSec}s）` : "");
               Store.notify("messages");
             };
@@ -326,7 +351,10 @@
                   //   避免状态还没清干净时把旧问题又弹一遍）
                   const qSeq = (t.pendingQuestionSeq != null)
                     ? t.pendingQuestionSeq : String(t.pendingQuestion);
-                  if (t.pendingQuestion && !JIGSAW.AskModalBusy
+                  // 已经有别的任务的弹窗开着（并发场景）→ 这次不弹，也不记序号，
+                  // 等下一轮轮询再试，避免"这个问题被永久跳过、任务一直挂着"
+                  const modalBusyElsewhere = JIGSAW.AskModalBusy && JIGSAW.AskModalBusy !== taskId;
+                  if (t.pendingQuestion && !modalBusyElsewhere && !JIGSAW.AskModalBusy
                       && JIGSAW._askShownSeq[taskId] !== qSeq) {
                     JIGSAW._askShownSeq[taskId] = qSeq;   // 防重复弹窗（轮询 2s 一次）
                     JIGSAW.AskModalBusy = taskId;

@@ -4,8 +4,11 @@
 纯本地存储，不接数据库；将来接 RAG 只加"向量索引"一步，结构不用动。
 
 安全：所有路径都做规范化校验，禁止 ../ 穿越到知识库根之外。
+
+隐藏文件（.DS_Store、Thumbs.db、.git、带隐藏/系统属性的条目等）
+一律不出现在目录树里，也不能被读取/上传/新建 —— 判定逻辑统一在 services/kb_fs.py，
+和 AI 侧工具（knowledge_info / knowledge_search）用的是同一份，保证两边一致。
 """
-import json
 import os
 import queue
 import shutil
@@ -15,38 +18,28 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from services import kb_fs
+
 router = APIRouter()
 
-# 知识库根目录：可配置（默认 backend/data/knowledge/），持久化在 data/knowledge_root.json
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-ROOT_FILE = os.path.join(DATA_DIR, "knowledge_root.json")
-
-
-def _default_root() -> str:
-    return os.path.join(DATA_DIR, "knowledge")
+DATA_DIR = kb_fs.DATA_DIR
+ROOT_FILE = kb_fs.ROOT_FILE
 
 
 def get_root() -> str:
     """当前知识库根目录（用户可换目录，重启保留）。"""
-    try:
-        with open(ROOT_FILE, encoding="utf-8") as f:
-            p = json.load(f).get("path")
-        if p and os.path.isdir(p):
-            return p
-    except Exception:
-        pass
-    return _default_root()
+    return kb_fs.get_root()
 
 
 def set_root(path: str) -> str:
     """设置知识库根目录；不存在则创建。"""
-    path = path.strip()
+    path = (path or "").strip()
     if not path:
         raise HTTPException(400, "目录不能为空")
-    os.makedirs(path, exist_ok=True)
-    with open(ROOT_FILE, "w", encoding="utf-8") as f:
-        json.dump({"path": path}, f, ensure_ascii=False)
-    return path
+    try:
+        return kb_fs.set_root(path)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # ============ 路径安全 ============
@@ -69,11 +62,23 @@ def _folder_path(name: str) -> str:
     return p
 
 
+def _reject_hidden(*parts: str) -> None:
+    """分类名 / 文档名只要有一段是隐藏名（.xx、Thumbs.db…），一律拒绝。
+
+    前端已经不展示隐藏项，这里再挡一道，避免"看不见但能被写入/读到"的缝隙。
+    """
+    for part in parts:
+        for seg in str(part or "").replace("\\", "/").split("/"):
+            if seg and kb_fs.is_hidden(seg):
+                raise HTTPException(400, f"名字不合法（不允许隐藏文件/目录）：{part}")
+
+
 def _doc_path(folder: str, name: str) -> str:
     if not name:
         raise HTTPException(400, "文档名不能为空")
     if "/" in name or "\\" in name or name in (".", ".."):
         raise HTTPException(400, "文档名不合法")
+    _reject_hidden(name)
     return _safe_join(folder, name)
 
 
@@ -89,17 +94,23 @@ def _meta(path: str) -> dict:
 # ============ 查询 ============
 @router.get("/knowledge/tree")
 def kb_tree():
-    """返回完整目录树：{ folders: [{name, docs: [...]}], rootDocs: [...] }"""
+    """返回完整目录树：{ folders: [{name, docs: [...]}], rootDocs: [...] }
+
+    子目录也一并列出（扁平化）：嵌套分类 "旅行/日本" 会作为一条记录返回，
+    name 就是它的相对路径 "旅行/日本"，重命名/删除/建文档都拿这个 name 当标识。
+    否则在嵌套分类里建的文档会从界面上"消失"。
+    """
     root = get_root()
     folders, root_docs = [], []
-    for entry in sorted(os.listdir(root)):
-        p = os.path.join(root, entry)
-        if os.path.isdir(p):
-            docs = [_meta(os.path.join(p, f)) for f in sorted(os.listdir(p))
-                    if os.path.isfile(os.path.join(p, f))]
-            folders.append({"name": entry, "docs": docs})
-        elif os.path.isfile(p):
-            root_docs.append(_meta(p))
+    if not os.path.isdir(root):
+        return {"folders": folders, "rootDocs": root_docs}
+
+    for name in kb_fs.visible_dirs(root):
+        dirpath = os.path.join(root, *name.split("/"))
+        docs = [_meta(os.path.join(dirpath, f)) for f in kb_fs.visible_files(dirpath)]
+        folders.append({"name": name, "docs": docs})
+    for f in kb_fs.visible_files(root):
+        root_docs.append(_meta(os.path.join(root, f)))
     return {"folders": folders, "rootDocs": root_docs}
 
 
@@ -217,6 +228,7 @@ def kb_create_folder(payload: FolderIn):
     name = (payload.name or "").strip().strip("/")
     if not name:
         raise HTTPException(400, "文件夹名不能为空")
+    _reject_hidden(name)
     p = _safe_join(name)
     if os.path.exists(p):
         raise HTTPException(400, f"文件夹已存在：{name}")
@@ -230,19 +242,42 @@ def kb_rename_folder(payload: FolderIn):
     old, new = (payload.name or "").strip(), (payload.newName or "").strip()
     if not old or not new:
         raise HTTPException(400, "旧名与新名都不能为空")
+    _reject_hidden(new)
     old_p = _folder_path(old)
     new_p = _safe_join(new)
     if os.path.exists(new_p):
         raise HTTPException(400, f"目标文件夹已存在：{new}")
-    os.rename(old_p, new_p)
+    os.makedirs(os.path.dirname(new_p), exist_ok=True)   # 新名字带层级时先建父目录
+    try:
+        os.rename(old_p, new_p)
+    except Exception as e:
+        raise HTTPException(500, f"重命名失败：{type(e).__name__}: {e}")
     return {"ok": True, "name": new}
 
 
 @router.delete("/knowledge/folder")
 def kb_delete_folder(folder: str = ""):
-    """删除文件夹（整个分类，含内部全部文档）。"""
+    """删除文件夹（整个分类，含内部全部文档）。
+
+    Windows 上文件被占用（比如在 Word 里开着）会 PermissionError：
+    先尝试改权限再删一次；仍失败就返回明确原因，前端据此提示用户。
+    """
+    if not folder:
+        raise HTTPException(400, "不能删除知识库根目录")
     p = _folder_path(folder)
-    shutil.rmtree(p)
+
+    def _onerror(func, path, exc):
+        try:
+            os.chmod(os.path.dirname(path), 0o777)
+            os.chmod(path, 0o777)
+            func(path)
+        except Exception:
+            pass
+
+    try:
+        shutil.rmtree(p, onerror=_onerror)
+    except Exception as e:
+        raise HTTPException(500, f"删除失败：{type(e).__name__}: {e}（文件可能被其他程序占用）")
     return {"ok": True, "name": folder}
 
 
@@ -299,5 +334,8 @@ def kb_delete_doc(folder: str = "", name: str = ""):
     p = _doc_path(folder, name)
     if not os.path.isfile(p):
         raise HTTPException(404, f"文档不存在：{folder}/{name}")
-    os.remove(p)
+    try:
+        os.remove(p)
+    except Exception as e:
+        raise HTTPException(500, f"删除失败：{type(e).__name__}: {e}（文件可能被其他程序占用）")
     return {"ok": True, "folder": folder, "name": name}

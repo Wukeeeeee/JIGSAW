@@ -41,7 +41,8 @@
 
   function messageEl(msg, conv) {
     const isUser = msg.role === "user";
-    const model = JIGSAW.ModelService.get(msg.modelId);
+    // 用 byId：模型被删掉后不再"张冠李戴"显示成列表里第一个模型
+    const model = JIGSAW.ModelService.byId(msg.modelId);
     const wrap = h("div", { class: "msg " + (isUser ? "msg-user" : "msg-assistant") + (msg.status === "streaming" ? " msg-sending" : ""), "data-mid": msg.id },
       h("div", { class: "msg-avatar" }, Icons.icon(isUser ? "user" : "jigsaw", 14)),
       h("div", { class: "msg-content" },
@@ -75,7 +76,7 @@
         } else if (act === "regenerate") {
           JIGSAW.ChatService.regenerate(convId);
         } else if (act === "cancel") {
-          JIGSAW.ChatService.cancel();
+          JIGSAW.ChatService.cancel(convId);
         }
       });
     });
@@ -112,13 +113,13 @@
         else if (!hasTools && tagRow) { tagRow.remove(); }
         // model tag update
         const tag = el(".model-tag", node);
-        if (tag) tag.textContent = (JIGSAW.ModelService.get(msg.modelId) || {}).name || "";
+        if (tag) tag.textContent = (JIGSAW.ModelService.byId(msg.modelId) || {}).name || "";
         // 终止按钮：streaming（排队/思考/等回答）时显示，完成/失败后移除
         let cancelBtn = el(".msg-cancel", node);
         if (isStream && !cancelBtn) {
           const cb = h("button", { class: "icon-btn icon-btn-sm msg-cancel", "data-act": "cancel", title: "终止此任务" }, Icons.icon("x", 13));
           const actions = el(".msg-actions", node);
-          if (actions) { actions.appendChild(cb); cb.addEventListener("click", () => JIGSAW.ChatService.cancel()); }
+          if (actions) { actions.appendChild(cb); cb.addEventListener("click", () => JIGSAW.ChatService.cancel(convId)); }
         } else if (!isStream && cancelBtn) {
           cancelBtn.remove();
         }
@@ -156,6 +157,10 @@
 
   function renderInput(conv) {
     const bar = el(".chat-input-bar", container);
+    // 重渲染输入框会清空用户正在打的字 → 先把草稿存下来，渲染完再放回去
+    const oldTa = el(".chat-input-box textarea", bar);
+    const draft = oldTa ? oldTa.value : "";
+    const wasFocused = oldTa && document.activeElement === oldTa;
     bar.innerHTML = "";
     const activeId = conv ? conv.modelId : JIGSAW.ModelService.getActive().id;
 
@@ -266,6 +271,9 @@
     bar.append(h("div", { class: "chat-input-inner" }, box, tools));
     inputTa = ta;
 
+    // 恢复草稿（模型切换等重渲染时，用户打了一半的字不会被吃掉）
+    if (draft) { ta.value = draft; }
+
     const autosize = () => {
       ta.style.height = "0px";                       // 先归零，强制重新计算内容高度
       const h = Math.min(160, Math.max(32, ta.scrollHeight));
@@ -291,7 +299,9 @@
     el("[data-new]", tools).addEventListener("click", () => JIGSAW.Router.navigate("/"));
     el("[data-qp]", tools).addEventListener("click", () => JIGSAW.QueuePanel.open());
 
-    setTimeout(() => ta.focus(), 30);
+    autosize();
+    if (wasFocused) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    else setTimeout(() => ta.focus(), 30);   // 首次进入聊天页：自动聚焦输入框
   }
 
   // 渲染队列状态徽标（发送按钮旁）：空闲隐藏；回复中显示"正在回复"；有排队时显示条数
@@ -302,7 +312,9 @@
     const q = JIGSAW.ChatService.queueInfo();
     if (!q.busy) { qEl.classList.add("hidden"); qEl.textContent = ""; return; }
     const pending = q.pending > 0 ? " · +" + q.pending : "";
-    qEl.textContent = "正在回复" + pending + " ›";
+    // 多个会话/模型并行时，说清楚同时在跑几条
+    const head = (q.active || 1) > 1 ? `${q.active} 个回复中` : "正在回复";
+    qEl.textContent = head + pending + " ›";
     qEl.classList.remove("hidden");
   }
 

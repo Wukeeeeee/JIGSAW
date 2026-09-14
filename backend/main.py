@@ -44,4 +44,10 @@ app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "jigsaw-backend", "version": "0.1.0"}
+    return {
+        "status": "ok",
+        "service": "jigsaw-backend",
+        "version": "0.1.0",
+        "workers": task_service.worker_count(),      # 并发 Worker 数
+        "running": task_service.running_count(),     # 当前正在处理的任务数
+    }

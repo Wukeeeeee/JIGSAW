@@ -35,19 +35,21 @@
   background-size: var(--grid-size) var(--grid-size);
 }
 
-.wf-svg { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
+/* ★ .wf-svg 必须是真 SVG 根元素（createElementNS），否则里面的 path 不会渲染 */
+.wf-svg { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; z-index: 0; }
 
-/* edge path */
-.wf-edge { fill: none; stroke: var(--line-2); stroke-width: 1.5; pointer-events: stroke; transition: stroke 150ms; }
+/* edge path —— 用 --line-strong 而不是 --line-2：深色背景下 #2f2f2f 几乎看不见 */
+.wf-edge { fill: none; stroke: var(--line-strong); stroke-width: 2; pointer-events: stroke; transition: stroke 150ms; }
 .wf-edge.from-success { stroke: var(--st-success); }
 .wf-edge.to-running {
   stroke: var(--st-running);
   stroke-dasharray: 6 4;
+  stroke-width: 2.5;
   animation: edgeFlow .7s linear infinite;
 }
 @keyframes edgeFlow { to { stroke-dashoffset: -10; } }
 
-.wf-temp-edge { fill: none; stroke: var(--white); stroke-width: 1.5; stroke-dasharray: 4 4; pointer-events: none; }
+.wf-temp-edge { fill: none; stroke: var(--white); stroke-width: 2; stroke-dasharray: 4 4; pointer-events: none; }
 
 /* ---- node ---- */
 .wf-node {
@@ -98,7 +100,14 @@
 .wf-node-model .lbl { color: var(--text-3); }
 
 .wf-node-tools { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
-.tool-tag { font-family: var(--font-mono); font-size: 9px; letter-spacing: .05em; color: var(--text-3); border: 1px solid var(--line-1); padding: 1px 5px; text-transform: uppercase; }
+.tool-tag {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .05em;
+  color: var(--text-3); border: 1px solid var(--line-1); padding: 1px 5px;
+}
+.tool-tag-ico { display: inline-flex; opacity: .75; }
+.tool-tag.unknown { border-style: dashed; color: var(--text-4); text-decoration: line-through; }
+.tool-none { font-family: var(--font-mono); font-size: 10px; color: var(--text-4); }
 
 .wf-node-foot {
   display: flex; align-items: center; justify-content: space-between;
@@ -114,8 +123,14 @@
   border-radius: 0;
   z-index: 3;
 }
+/* 端口只有 11px，太难点中 → 加一圈不可见的放大热区（视觉不变） */
+.port::before { content: ""; position: absolute; inset: -9px; }
 .port.in  { left: -6px;  top: 50%; transform: translateY(-50%); }
 .port.out { right: -6px; top: 50%; transform: translateY(-50%); }
+/* 拖线过程中：所有输入端口高亮，提示可以松手了 */
+.wf-canvas.connecting .wf-node.editable .port.in {
+  background: var(--white); border-color: var(--white); box-shadow: 0 0 0 3px rgba(255, 255, 255, .12);
+}
 .wf-node.editable .port { cursor: crosshair; }
 .wf-node.editable .port:hover { background: var(--white); border-color: var(--white); }
 .wf-node.locked .port { border-color: var(--line-1); background: var(--bg-sunken); cursor: default; }
@@ -205,14 +220,20 @@
 
 .field-tools { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .tool-check {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--line-2); padding: 3px 8px;
   font-family: var(--font-mono); font-size: 10px; color: var(--text-2);
   cursor: pointer; transition: all var(--transition); user-select: none;
+  background: none;
 }
-.tool-check:hover { border-color: var(--line-strong); }
+.tool-check .icon { flex: none; opacity: .8; }
+.tool-check:hover { border-color: var(--line-strong); color: var(--text-1); }
 .tool-check.on { background: var(--white); color: var(--black); border-color: var(--white); }
+.tool-check.on .icon { opacity: 1; }
 html[data-theme="light"] .tool-check.on { background: #111; color: #fff; border-color: #111; }
+/* 该工具在工具广场被禁用 → 灰掉提示，但仍可在此查看 */
+.tool-check.off { opacity: .45; }
+.tool-check.off::after { content: "（已禁用）"; font-size: 9px; }
 
 /* 自定义工具 */
 .tool-tag.custom { display: inline-flex; align-items: center; gap: 4px; border-color: var(--line-2); color: var(--text-2); text-transform: none; }

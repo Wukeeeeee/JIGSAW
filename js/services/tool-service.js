@@ -77,7 +77,7 @@
     /** 某个工具被调用的次数 */
     countOf(name) { return Number((stats.calls || {})[name] || 0); },
 
-    /** 从后端拉一次统计；失败保留旧缓存 */
+    /** 从后端拉一次统计；失败保留旧缓存。★ 拿到新数据会广播 "stats" 事件 */
     async loadStats() {
       if (!JIGSAW.Http.isRemote()) return stats;
       try {
@@ -91,6 +91,8 @@
             total: Number(r.total || 0)
           };
           statsLoaded = true;
+          // 通知统计页 / 工具详情页刷新（以前只在进入页面时拉一次 → 数字永远是旧的）
+          JIGSAW.Store.notify("stats");
         }
       } catch (e) {
         console.warn("拉取调用统计失败", e);
