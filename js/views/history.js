@@ -1,4 +1,4 @@
-﻿/* ============================================================
+/* ============================================================
    JIGSAW — History Drawer
    Click-to-open overlay panel (never visible by default).
    ============================================================ */
@@ -67,12 +67,61 @@
               h("span", { class: "conv-time" }, timeLabel(c.createdAt))
             )
           ),
-          h("button", { class: "icon-btn conv-del", "data-del-id": c.id, title: "删除对话" }, Icons.icon("trash", 13))
+          h("button", { class: "icon-btn conv-rename", "data-rename-id": c.id, title: "重命名会话" }, Icons.icon("edit", 12)),
+          h("button", { class: "icon-btn conv-wf", "data-wf-id": c.id, title: "打开工作流画布" }, Icons.icon("branch", 12)),
+          h("button", { class: "icon-btn conv-del", "data-del-id": c.id, title: "删除会话" }, Icons.icon("trash", 13))
         ));
       });
     });
     listEl.innerHTML = "";
     listEl.appendChild(frag);
+
+    function startRename(id, rowEl) {
+      const c = JIGSAW.ChatService.get(id);
+      if (!c) return;
+      const metaEl = el(".conv-meta", rowEl);
+      if (!metaEl || el(".conv-rename-input", metaEl)) return;
+
+      const currentTitle = c.title || "";
+      const input = h("input", {
+        type: "text",
+        class: "conv-rename-input",
+        value: currentTitle,
+        maxlength: "60"
+      });
+
+      metaEl.innerHTML = "";
+      metaEl.appendChild(input);
+      input.focus();
+      input.select();
+
+      let committed = false;
+      const finish = (commit) => {
+        if (committed) return;
+        committed = true;
+        const val = input.value.trim();
+        if (commit && val && val !== currentTitle) {
+          JIGSAW.ChatService.rename(id, val);
+          JIGSAW.Toast.show("已重命名为：" + val);
+        }
+        renderList();
+      };
+
+      input.addEventListener("click", e => e.stopPropagation());
+      input.addEventListener("mousedown", e => e.stopPropagation());
+      input.addEventListener("dblclick", e => e.stopPropagation());
+      input.addEventListener("keydown", e => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finish(true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          finish(false);
+        }
+      });
+      input.addEventListener("blur", () => finish(true));
+    }
 
     els(".conv-item", listEl).forEach(btn => {
       btn.addEventListener("click", () => {
@@ -84,12 +133,41 @@
       });
     });
 
+    els(".conv-rename", listEl).forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        const id = btn.dataset.renameId;
+        const row = btn.closest(".conv-row");
+        if (row) startRename(id, row);
+      });
+    });
+
+    els(".conv-title", listEl).forEach(titleSpan => {
+      titleSpan.addEventListener("dblclick", e => {
+        e.stopPropagation();
+        const row = titleSpan.closest(".conv-row");
+        const item = titleSpan.closest(".conv-item");
+        if (row && item) startRename(item.dataset.id, row);
+      });
+    });
+
+    els(".conv-wf", listEl).forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        const id = btn.dataset.wfId;
+        Store.set({ activeConversationId: id });
+        Store.notify("conversations");
+        setOpen(false);
+        JIGSAW.Router.navigate("/chat/" + id + "/workflow");
+      });
+    });
+
     els(".conv-del", listEl).forEach(del => {
       del.addEventListener("click", e => {
         e.stopPropagation();
         const id = del.dataset.delId;
         JIGSAW.ChatService.remove(id);
-        JIGSAW.Toast.show("已删除对话");
+        JIGSAW.Toast.show("已删除会话");
         if (location.hash.includes("/chat/" + id)) JIGSAW.Router.navigate("/");
         renderList();
       });
@@ -114,13 +192,20 @@
       const backdrop = h("div", { class: "drawer-backdrop" });
       const drawer = h("div", { class: "drawer" },
         h("div", { class: "drawer-header" },
-          h("button", {
-            class: "btn btn-primary btn-sm",
-            "data-new": "1"
-          }, Icons.icon("plus-sm", 14), "新建对话"),
+          h("div", { class: "drawer-new-row" },
+            h("button", {
+              class: "btn btn-primary btn-sm",
+              "data-new": "1"
+            }, Icons.icon("plus-sm", 14), "新建对话"),
+            h("button", {
+              class: "btn btn-sm",
+              "data-new-wf": "1",
+              title: "直接创建空白工作流编排"
+            }, Icons.icon("branch", 13), "新建工作流")
+          ),
           h("div", { class: "drawer-search" },
             Icons.icon("search", 14),
-            h("input", { type: "text", placeholder: "搜索对话…" })
+            h("input", { type: "text", placeholder: "搜索会话或工作流…" })
           )
         ),
         h("div", { class: "drawer-body" })
@@ -133,6 +218,11 @@
         setOpen(false);
         JIGSAW.Router.navigate("/");
       });
+      drawer.querySelector("[data-new-wf]").addEventListener("click", () => {
+        setOpen(false);
+        const conv = JIGSAW.ChatService.create({ title: "未命名工作流", text: "" });
+        JIGSAW.Router.navigate("/chat/" + conv.id + "/workflow");
+      });
       const search = drawer.querySelector("input");
       search.addEventListener("input", () => { query = search.value.trim(); renderList(); });
       search.addEventListener("keydown", e => { if (e.key === "Escape") setOpen(false); });
@@ -142,6 +232,9 @@
         const want = Store.get().ui.historyOpen;
         backdrop.classList.toggle("open", !!want);
         drawer.classList.toggle("open", !!want);
+      });
+      Store.subscribe("conversations", () => {
+        if (Store.get().ui.historyOpen) renderList();
       });
     },
 

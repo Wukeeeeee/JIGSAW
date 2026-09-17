@@ -39,7 +39,7 @@ def _root() -> str:
 
     知识库的根目录是用户可换的（设置里点「目录」按钮），
     换完会写进 backend/data/knowledge_root.json：
-        {"path": "E:\\my_repo\\Figsaw\\backend\\data\\knowledge"}
+        {"path": "E:\\my_repo\\Jigsaw\\backend\\data\\knowledge"}
     这里读的就是同一个配置，保证和知识库页面看到的是同一个地方。
     读不到或路径失效时，退回默认目录 backend/data/knowledge/。
     """

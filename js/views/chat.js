@@ -1,4 +1,4 @@
-﻿/* ============================================================
+/* ============================================================
    JIGSAW — Chat view
    ============================================================ */
 (function () {
@@ -134,22 +134,84 @@
     scrollToBottom(false);
   }
 
+  function buildTitleEl(conv) {
+    const currentTitle = (conv ? conv.title : "") || "未命名对话";
+    const wrap = h("div", { class: "topbar-title-wrap", title: "点击编辑标题" },
+      h("span", { class: "topbar-title" }, currentTitle),
+      h("span", { class: "topbar-title-edit-icon" }, Icons.icon("edit", 11))
+    );
+
+    wrap.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (wrap.querySelector("input")) return;
+
+      const input = h("input", {
+        type: "text",
+        class: "topbar-title-input",
+        value: currentTitle,
+        maxlength: "60"
+      });
+
+      wrap.innerHTML = "";
+      wrap.appendChild(input);
+      input.focus();
+      input.select();
+
+      let committed = false;
+      const finish = (commit) => {
+        if (committed) return;
+        committed = true;
+        const val = input.value.trim();
+        if (commit && val && val !== currentTitle) {
+          JIGSAW.ChatService.rename(convId, val);
+          JIGSAW.Toast.show("标题已更新");
+        } else {
+          wrap.innerHTML = "";
+          wrap.append(
+            h("span", { class: "topbar-title" }, currentTitle),
+            h("span", { class: "topbar-title-edit-icon" }, Icons.icon("edit", 11))
+          );
+        }
+      };
+
+      input.addEventListener("click", ke => ke.stopPropagation());
+      input.addEventListener("keydown", ke => {
+        ke.stopPropagation();
+        if (ke.key === "Enter") {
+          ke.preventDefault();
+          finish(true);
+        } else if (ke.key === "Escape") {
+          ke.preventDefault();
+          finish(false);
+        }
+      });
+
+      input.addEventListener("blur", () => finish(true));
+    });
+
+    return wrap;
+  }
+
   function renderHeader(conv) {
     const header = el(".chat-header", container);
     header.innerHTML = "";
+
     header.append(
-      h("button", { class: "icon-btn", "data-history": "1", title: "历史记录" }, Icons.icon("menu")),
-      h("div", { class: "topbar-title", style: { flex: "1", textAlign: "center" } }, conv ? conv.title : ""),
-      h("div", { class: "topbar-spacer" }),
-      h("div", { class: "topbar", style: { border: "none", padding: "0" } },
-        h("button", { class: "btn btn-sm", "data-wf": "1" }, Icons.icon("branch", 13), "工作流"),
+      h("div", { class: "topbar-left-group" },
+        h("button", { class: "icon-btn", "data-home": "1", title: "返回主页" }, Icons.icon("home", 14)),
+        h("button", { class: "icon-btn", "data-history": "1", title: "历史记录" }, Icons.icon("menu")),
+        h("div", { class: "topbar-divider" }),
+        buildTitleEl(conv)
+      ),
+      h("div", { class: "topbar-right-group" },
         h("button", { class: "btn btn-sm", "data-tools": "1" }, Icons.icon("tool", 13), "工具"),
         h("button", { class: "btn btn-sm", "data-kb": "1" }, Icons.icon("book", 13), "知识库"),
         h("button", { class: "icon-btn", "data-settings": "1", title: "设置" }, Icons.icon("sliders"))
       )
     );
+
+    el("[data-home]", header).addEventListener("click", () => JIGSAW.Router.navigate("/"));
     el("[data-history]", header).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
-    el("[data-wf]", header).addEventListener("click", () => JIGSAW.Router.navigate("/chat/" + convId + "/workflow"));
     el("[data-tools]", header).addEventListener("click", () => JIGSAW.Router.navigate("/tools"));
     el("[data-kb]", header).addEventListener("click", () => JIGSAW.Router.navigate("/knowledge"));
     el("[data-settings]", header).addEventListener("click", () => JIGSAW.Router.navigate("/settings"));
@@ -334,10 +396,22 @@
       root.innerHTML = "";
       JIGSAW.setViewClass(root, "view-chat");
       const header = h("div", { class: "topbar chat-header" });
+      const switchFloat = h("div", { class: "view-switch-float" },
+        h("button", { class: "view-switch-tab active", "data-tab": "chat", title: "当前：对话视图" },
+          Icons.icon("message", 13),
+          h("span", null, "对话")
+        ),
+        h("button", { class: "view-switch-tab", "data-tab": "workflow", title: "切换至工作流画布" },
+          Icons.icon("branch", 13),
+          h("span", null, "工作流")
+        )
+      );
       bodyEl = h("div", { class: "chat-body" });
       scrollEl = bodyEl;
       const inputBar = h("div", { class: "chat-input-bar" });
-      root.append(header, bodyEl, inputBar);
+      root.append(header, switchFloat, bodyEl, inputBar);
+
+      el("[data-tab='workflow']", switchFloat).addEventListener("click", () => JIGSAW.Router.navigate("/chat/" + convId + "/workflow"));
 
       renderHeader(conv);
       renderInput(conv);

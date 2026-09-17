@@ -9,9 +9,10 @@
   --st-running: #4c9aff;
   --st-success: #3eb68a;
   --st-failed: #e5484d;
+  --st-skipped: #8a8a8a;
 }
 
-.view-workflow { height: 100%; display: flex; flex-direction: column; background: var(--bg-app); }
+.view-workflow { height: 100%; display: flex; flex-direction: column; background: var(--bg-app); position: relative; }
 
 .wf-body { flex: 1; display: flex; min-height: 0; position: relative; }
 
@@ -38,18 +39,65 @@
 /* ★ .wf-svg 必须是真 SVG 根元素（createElementNS），否则里面的 path 不会渲染 */
 .wf-svg { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; z-index: 0; }
 
-/* edge path —— 用 --line-strong 而不是 --line-2：深色背景下 #2f2f2f 几乎看不见 */
-.wf-edge { fill: none; stroke: var(--line-strong); stroke-width: 2; pointer-events: stroke; transition: stroke 150ms; }
-.wf-edge.from-success { stroke: var(--st-success); }
+/* edge path —— 正交直角曼哈顿布线，微圆角拐角 */
+.wf-edge {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  marker-end: url(#wf-arrow);
+  pointer-events: stroke;
+  cursor: pointer;
+  transition: stroke 120ms, stroke-width 120ms;
+}
+.wf-edge:hover { stroke: var(--text-2); stroke-width: 2.5; }
+.wf-edge.selected { stroke: var(--white) !important; stroke-width: 2.5 !important; marker-end: url(#wf-arrow-selected) !important; }
+.wf-edge.from-success { stroke: var(--st-success); marker-end: url(#wf-arrow-success); }
+.wf-edge.from-skipped { stroke: var(--st-skipped); stroke-dasharray: 4 4; marker-end: url(#wf-arrow-skipped); }
 .wf-edge.to-running {
   stroke: var(--st-running);
   stroke-dasharray: 6 4;
-  stroke-width: 2.5;
+  stroke-width: 2.2;
+  marker-end: url(#wf-arrow-running);
   animation: edgeFlow .7s linear infinite;
 }
+.wf-edge.is-loop { stroke-dasharray: 5 3; }
 @keyframes edgeFlow { to { stroke-dashoffset: -10; } }
 
-.wf-temp-edge { fill: none; stroke: var(--white); stroke-width: 2; stroke-dasharray: 4 4; pointer-events: none; }
+/* 连线点击热区（方便鼠标轻松命中） */
+.wf-edge-hitbox { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+
+/* 选中的连线中央删除按钮 */
+.wf-edge-del-wrap {
+  position: absolute; transform: translate(-50%, -50%);
+  z-index: 10; pointer-events: auto;
+}
+.wf-edge-del-btn {
+  width: 24px; height: 24px; background: var(--bg-surface);
+  border: 1px solid var(--line-strong); color: var(--text-2);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 0; cursor: pointer; padding: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+  transition: all var(--transition);
+}
+.wf-edge-del-btn:hover { background: var(--st-failed); color: var(--white); border-color: var(--st-failed); }
+
+/* 起点节点特化：禁止输入端口、禁止删除 */
+.wf-node.node-start { border-left: 3px solid var(--white); }
+.wf-node.node-start .port.in { display: none !important; }
+.wf-node.node-start [data-del] { display: none !important; }
+
+.wf-temp-edge {
+  fill: none;
+  stroke: var(--white);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 4;
+  marker-end: url(#wf-arrow);
+  pointer-events: none;
+}
 
 /* ---- node ---- */
 .wf-node {
@@ -75,6 +123,7 @@
 }
 @keyframes nodePulse { 0%,100% { box-shadow: 0 0 0 0 rgba(76,154,255,.18); } 50% { box-shadow: 0 0 0 6px rgba(76,154,255,0); } }
 .wf-node.failed { border-color: var(--st-failed); }
+.wf-node.skipped { border-color: var(--st-skipped); border-style: dashed; opacity: .88; }
 
 .wf-node-head {
   display: flex; align-items: center; gap: var(--sp-2);
@@ -93,6 +142,15 @@
 .wf-node .node-status-badge.s-running { border-color: var(--st-running); color: var(--st-running); animation: badgePulse 1s infinite; }
 .wf-node .node-status-badge.s-success { border-color: var(--st-success); color: var(--st-success); }
 .wf-node .node-status-badge.s-failed { border-color: var(--st-failed); color: var(--st-failed); }
+.wf-node .node-status-badge.s-skipped { border-color: var(--st-skipped); color: var(--st-skipped); border-style: dashed; }
+
+.wf-node-tolerance {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .04em;
+  color: var(--text-2); border: 1px dashed var(--line-strong);
+  background: var(--bg-sunken); padding: 1px 5px; width: fit-content;
+}
+.wf-node-tolerance svg { flex: none; }
 
 .wf-node-body { padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
 .wf-node-desc { font-size: 11px; line-height: 1.5; color: var(--text-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -131,10 +189,33 @@
 .wf-canvas.connecting .wf-node.editable .port.in {
   background: var(--white); border-color: var(--white); box-shadow: 0 0 0 3px rgba(255, 255, 255, .12);
 }
+/* 磁吸对齐/吸附激活端口 */
+.wf-canvas.connecting .wf-node.editable .port.in.snap-active {
+  background: var(--white) !important;
+  border-color: var(--white) !important;
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, .35) !important;
+  transform: translateY(-50%) scale(1.35);
+  transition: transform 90ms ease, box-shadow 90ms ease;
+}
 .wf-node.editable .port { cursor: crosshair; }
 .wf-node.editable .port:hover { background: var(--white); border-color: var(--white); }
 .wf-node.locked .port { border-color: var(--line-1); background: var(--bg-sunken); cursor: default; }
 .wf-node.locked .port.in { display: none; }
+
+/* 逻辑门/控制节点卡片特征 */
+.wf-node.node-logic {
+  border-left: 2px solid var(--line-strong);
+}
+.wf-node-logic-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .05em;
+  color: var(--text-2);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-1);
+  padding: 4px 8px;
+  margin-top: 2px;
+}
 
 /* ---- canvas overlay controls (bottom-left) ---- */
 .wf-controls {
@@ -151,15 +232,38 @@
 }
 .wf-fit { border-left: 1px solid var(--line-1); margin-left: 2px; padding-left: 2px; }
 
-/* 添加节点弹层 */
-.add-node-wrap { position: relative; }
+.add-node-wrap { position: relative; display: inline-flex; align-items: center; }
 .wf-popover {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
-  width: 300px; background: var(--bg-raised);
-  border: 1px solid var(--line-2); box-shadow: 4px 4px 0 rgba(0,0,0,.25);
-  display: none;
+  position: absolute; top: calc(100% + 6px); right: 0; left: auto; z-index: 40;
+  width: 320px; max-height: min(480px, calc(100vh - 100px)); background: var(--bg-raised);
+  border: 1px solid var(--line-2); box-shadow: 4px 4px 0 rgba(0,0,0,.35);
+  display: none; flex-direction: column; overflow: hidden;
 }
-.wf-popover.open { display: block; }
+.wf-popover.open { display: flex; }
+.wf-pop-tabs {
+  display: flex; flex: none; background: var(--bg-sunken);
+  border-bottom: 1px solid var(--line-2);
+}
+.wf-pop-tab {
+  flex: 1; height: 32px; background: none; border: none;
+  border-bottom: 2px solid transparent; color: var(--text-3);
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .03em;
+  cursor: pointer; transition: all var(--transition);
+}
+.wf-pop-tab:hover { color: var(--text-1); }
+.wf-pop-tab.active { color: var(--text-1); border-bottom-color: var(--white); background: var(--bg-surface); }
+.wf-pop-list { max-height: 380px; overflow-y: auto; }
+.wf-pop-group {
+  padding: var(--sp-2) var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--line-faint);
+  user-select: none;
+}
 .wf-pop-item {
   display: flex; align-items: flex-start; gap: var(--sp-3);
   width: 100%; text-align: left; padding: var(--sp-3) var(--sp-4);

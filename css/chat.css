@@ -2,10 +2,10 @@
    JIGSAW — Chat
    ============================================================ */
 
-.view-chat { height: 100%; display: flex; flex-direction: column; background: var(--bg-app); }
+.view-chat { height: 100%; display: flex; flex-direction: column; background: var(--bg-app); position: relative; }
 
 .chat-body { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
-.chat-scroll { max-width: 760px; margin: 0 auto; padding: var(--sp-8) var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-6); }
+.chat-scroll { max-width: 760px; margin: 0 auto; padding: 56px var(--sp-6) var(--sp-10); display: flex; flex-direction: column; gap: var(--sp-6); }
 
 /* message row */
 .msg { display: flex; gap: var(--sp-3); }

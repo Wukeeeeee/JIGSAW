@@ -15,9 +15,7 @@
   JIGSAW._askShownSeq = JIGSAW._askShownSeq || {};
 
   function detectTemplate(text) {
-    const s = text.toLowerCase();
-    if (s.includes("gis") || s.includes("satellite") || s.includes("flood") || s.includes("map ")) return "gis";
-    return "default";
+    return "void";
   }
 
   const ChatService = {
@@ -87,7 +85,10 @@
       const conv = this.get(id);
       if (!conv) return;
       conv.title = title;
+      const wf = JIGSAW.WorkflowService && JIGSAW.WorkflowService.getForConversation(id);
+      if (wf) wf.name = title;
       Store.notify("conversations");
+      Store.notify("workflows");
     },
 
     touch(id) {

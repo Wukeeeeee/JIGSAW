@@ -10,6 +10,9 @@ __pycache__/
 .venv/
 venv/
 
+# 本地模型缓存（由 model_manager 自动下载生成，勿上传）
+backend/services/rag/models/
+
 # Node / Electron
 desktop/node_modules/
 desktop/dist/

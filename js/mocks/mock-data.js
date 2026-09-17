@@ -19,6 +19,13 @@
        apply_patch / calc / read_extra / knowledge_search / knowledge_info）。
        不要写不存在的工具名——勾了也不会有任何效果。 */
   const AGENTS = {
+    custom_agent: {
+      type: "custom_agent", category: "agent", name: "智能体 (Agent)", icon: "user",
+      desc: "通用智能体：自主配置角色提示词、模型绑定、工具分配与调用步数限制。",
+      defaultModel: "jigsaw-rapid", tools: [],
+      systemPrompt: "你是一个专业的通用智能体。请依据任务目标与分配的工具，高效完成当前工作流环节的任务。",
+      maxToolCalls: 5
+    },
     research: {
       type: "research", name: "研究 Agent", icon: "globe",
       desc: "检索网络与本地知识库，为任务收集有据可依的素材。",
@@ -60,16 +67,54 @@
       desc: "产出成品文件与最终交付物。",
       defaultModel: "jigsaw-ultra", tools: ["editfile", "apply_patch", "get_current_time"],
       systemPrompt: "你是交付负责人。产出清晰、易读的最终交付物。"
+    },
+    start: {
+      type: "start", category: "logic", name: "START · 任务起点", icon: "play",
+      desc: "工作流触发源头：接收用户输入并向下游智能体分发。",
+      defaultModel: "", tools: [],
+      systemPrompt: "【任务起点】工作流源头输入。"
+    },
+    gate_and: {
+      type: "gate_and", category: "logic", name: "与门 (AND)", icon: "gate-and",
+      desc: "并发汇聚：等待所有前置节点全部执行完成且满足条件后触发。",
+      defaultModel: "", tools: [],
+      systemPrompt: "【逻辑与门】前置依赖全部达成时放行后续节点。"
+    },
+    gate_or: {
+      type: "gate_or", category: "logic", name: "或门 (OR)", icon: "gate-or",
+      desc: "竞争触发：任一前置节点完成或满足条件时立即激活后续流程。",
+      defaultModel: "", tools: [],
+      systemPrompt: "【逻辑或门】任意前置依赖达成时放行后续节点。"
+    },
+    gate_not: {
+      type: "gate_not", category: "logic", name: "非门 (NOT)", icon: "gate-not",
+      desc: "反向触发：前置节点未满足或失败时激活备用分支。",
+      defaultModel: "", tools: [],
+      systemPrompt: "【逻辑非门】前置条件取反分支。"
+    },
+    condition_if: {
+      type: "condition_if", category: "logic", name: "条件判断 (IF)", icon: "condition",
+      desc: "基于判定条件或 Captain 审查结果，分流至 True / False 分支。",
+      defaultModel: "", tools: [],
+      systemPrompt: "【条件分支】判定输入产品是否达标并分流。"
+    },
+    loop_ctrl: {
+      type: "loop_ctrl", category: "logic", name: "循环控制 (Loop)", icon: "loop",
+      desc: "带质检重试或多轮迭代的闭环，未达标时回环至指定节点。",
+      defaultModel: "", tools: [],
+      systemPrompt: "【循环控制器】在未满足最终退出条件前持续调度迭代。"
+    },
+    try_catch: {
+      type: "try_catch", category: "logic", name: "异常捕获 (Try-Catch)", icon: "shield",
+      desc: "守护前置流程：前置节点异常时拦截错误，分流至兜底分支或注入缺省数据。",
+      defaultModel: "", tools: [],
+      systemPrompt: "【异常捕获控制器】在前置任务失败或出现异常时触发兜底接管逻辑。"
     }
   };
 
   const WF_TEMPLATES = {
-    default: [
-      { agentType: "research", x: 0,    y: 0 },
-      { agentType: "analysis", x: 320,  y: 0 },
-      { agentType: "writer",   x: 640,  y: 0 },
-      { agentType: "final",    x: 960,  y: 0 }
-    ],
+    void: [],
+    default: [],
     gis: [
       { agentType: "gisCollect", x: 0,   y: 0 },
       { agentType: "gisProcess", x: 340, y: 0 },
@@ -100,7 +145,7 @@
 
   /* ---------- 工作流工厂 ---------- */
   function buildWorkflow(convId, templateKey, executed) {
-    const tpl = WF_TEMPLATES[templateKey] || WF_TEMPLATES.default;
+    const tpl = (templateKey && WF_TEMPLATES[templateKey]) || WF_TEMPLATES.default || [];
     const nodes = tpl.map((n, i) => {
       const a = AGENTS[n.agentType];
       return {
@@ -115,6 +160,9 @@
         input: i === 0 ? "用户请求" : "节点输出:" + convId + "-n" + i,
         output: "节点输出:" + convId + "-n" + (i + 1),
         status: executed ? "success" : "waiting",
+        onError: "abort",
+        skipped: false,
+        fallbackValue: "",
         x: n.x, y: n.y
       };
     });
@@ -122,8 +170,8 @@
     return {
       id: "wf-" + convId,
       conversationId: convId,
-      name: "默认管线",
-      templateKey,
+      name: "空白工作流",
+      templateKey: templateKey || "void",
       nodes, edges,
       running: false,
       executed: !!executed

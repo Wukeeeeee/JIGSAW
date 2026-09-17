@@ -20,7 +20,7 @@
     status(convId) {
       const wf = WorkflowService.getForConversation(convId);
       if (!wf) return { running: false, done: 0, total: 0 };
-      const done = wf.nodes.filter(n => n.status === "success" || n.status === "failed").length;
+      const done = wf.nodes.filter(n => n.status === "success" || n.status === "failed" || n.status === "skipped").length;
       return { running: wf.running, done, total: wf.nodes.length };
     },
 
@@ -30,7 +30,10 @@
       if (!wf || wf.running) return;
 
       // reset then run
-      wf.nodes.forEach(n => { n.status = "waiting"; });
+      wf.nodes.forEach(n => {
+        n.status = "waiting";
+        n.skipped = false;
+      });
       wf.running = true;
       wf.executed = false;
       Store.notify("workflows");
@@ -60,7 +63,38 @@
           Store.notify("workflows");
           await delay(base + Math.random() * 500);
           if (token.cancelled) { node.status = "failed"; break; }
+
+          // 容错与异常处理：若该节点模拟异常或发生故障
+          if (node.simulateError) {
+            if (node.onError === "skip") {
+              node.status = "skipped";
+              node.skipped = true;
+              node.output = node.fallbackValue || JSON.stringify({
+                status: "skipped",
+                skipped: true,
+                message: "【容错策略生效】调用异常，已自动跳过该节点并放行下游。"
+              }, null, 2);
+              Store.notify("workflows");
+              await delay(120);
+              continue; // 容错成功，不中断流水线
+            } else if (node.onError === "fallback") {
+              node.status = "skipped";
+              node.skipped = true;
+              node.output = node.fallbackValue || "【兜底数据】服务未响应，注入预设备选数据继续执行。";
+              Store.notify("workflows");
+              await delay(120);
+              continue; // 容错成功，不中断流水线
+            } else {
+              node.status = "failed";
+              node.skipped = false;
+              node.output = "【异常报错】节点执行失败且未开启自动容错，流水线已终止。";
+              Store.notify("workflows");
+              break; // 中断报错
+            }
+          }
+
           node.status = "success";
+          node.skipped = false;
           Store.notify("workflows");
           await delay(120);
         }

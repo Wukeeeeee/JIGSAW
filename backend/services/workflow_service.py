@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-STATUS_ORDER = ("waiting", "running", "success", "failed")
+STATUS_ORDER = ("waiting", "running", "success", "failed", "skipped")
 
 
 def normalize(payload: Dict[str, Any]) -> Dict[str, Any]:

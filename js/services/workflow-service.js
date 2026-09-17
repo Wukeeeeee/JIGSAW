@@ -24,6 +24,38 @@
         st.workflows[wf.id] = wf;
         Store.notify("workflows");
       }
+      // 确保存在固定任务起点 START 节点
+      if (wf && wf.nodes && !wf.nodes.some(n => n.agentType === "start")) {
+        const hasOtherNodes = wf.nodes.length > 0;
+        let minX = Infinity, minY = 80;
+        if (hasOtherNodes) {
+          wf.nodes.forEach(n => { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); });
+        }
+        const startX = hasOtherNodes ? Math.min(-280, minX - 290) : 80;
+        const startY = hasOtherNodes ? minY : 80;
+        const startNode = {
+          id: convId + "-n-start",
+          agentType: "start",
+          category: "logic",
+          name: "START · 任务起点",
+          icon: "play",
+          description: "工作流唯一固定源头：负责接收 Prompt 或初始任务目标向后派发。",
+          modelId: "",
+          systemPrompt: "【任务起点】工作流源头输入。",
+          tools: [],
+          input: "用户输入 / 任务目标",
+          output: "初始任务提示词",
+          status: "waiting",
+          x: startX,
+          y: startY
+        };
+        wf.nodes.unshift(startNode);
+        // 如果有首个节点且没有连线，自动从起点连过去
+        const firstAgent = wf.nodes.find(n => n.agentType !== "start");
+        if (firstAgent && !wf.edges.some(e => e.to === firstAgent.id)) {
+          wf.edges.unshift({ id: convId + "-e-start", from: startNode.id, to: firstAgent.id });
+        }
+      }
       return wf;
     },
 
@@ -31,7 +63,15 @@
 
     /** available agent templates for adding new nodes */
     templates() {
-      return Object.keys(AGENTS).map(k => ({ type: k, name: AGENTS[k].name, icon: AGENTS[k].icon, desc: AGENTS[k].desc }));
+      return Object.keys(AGENTS)
+        .filter(k => AGENTS[k].category === "logic" || k === "custom_agent")
+        .map(k => ({
+          type: k,
+          name: AGENTS[k].name,
+          icon: AGENTS[k].icon,
+          desc: AGENTS[k].desc,
+          category: AGENTS[k].category || "agent"
+        }));
     },
 
     isEditable(wf, nodeId) {
@@ -42,16 +82,21 @@
     addNode(wfId, agentType, x, y) {
       const wf = this.get(wfId);
       if (!wf || wf.running) return null;
-      const a = AGENTS[agentType] || AGENTS.research;
+      const a = AGENTS[agentType] || AGENTS.custom_agent || AGENTS.research;
       const id = uid(wfId + "-n");
-      // 模板里的 defaultModel 是占位的假 id（jigsaw-ultra 之类），
-      // 新建节点直接用当前实际可用的模型，省得每个节点都显示"未选择模型"
       const active = JIGSAW.ModelService.getActive();
+      const isLogic = a.category === "logic";
       const node = {
-        id, agentType: a.type, name: a.name, icon: a.icon,
-        description: a.desc, modelId: (active && active.id) || a.defaultModel,
-        systemPrompt: a.systemPrompt, tools: a.tools.slice(),
-        input: "", output: "", status: "waiting", x, y
+        id, agentType: a.type, category: a.category || "agent", name: a.name, icon: a.icon,
+        description: a.desc, modelId: isLogic ? "" : ((active && active.id) || a.defaultModel),
+        systemPrompt: a.systemPrompt, tools: isLogic ? [] : a.tools.slice(),
+        input: "", output: "", status: "waiting", x, y,
+        gateType: a.type.startsWith("gate_") ? a.type.replace("gate_", "").toUpperCase() : null,
+        loopMax: a.type === "loop_ctrl" ? 3 : null,
+        maxToolCalls: isLogic ? null : (a.maxToolCalls || 5),
+        onError: "abort",
+        skipped: false,
+        fallbackValue: ""
       };
       wf.nodes.push(node);
       Store.notify("workflows");
@@ -61,6 +106,8 @@
     removeNode(wfId, nodeId) {
       const wf = this.get(wfId);
       if (!wf || wf.running) return false;
+      const node = wf.nodes.find(n => n.id === nodeId);
+      if (node && node.agentType === "start") return false; // 固定任务起点不可删除
       if (!this.isEditable(wf, nodeId)) return false;
       wf.nodes = wf.nodes.filter(n => n.id !== nodeId);
       wf.edges = wf.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
@@ -74,7 +121,7 @@
       const wf = this.get(wfId);
       const node = wf && wf.nodes.find(n => n.id === nodeId);
       if (!node) return false;
-      if (!this.isEditable(wf, nodeId) && ("name" in patch || "description" in patch || "systemPrompt" in patch || "tools" in patch || "modelId" in patch)) {
+      if (!this.isEditable(wf, nodeId) && ("name" in patch || "description" in patch || "systemPrompt" in patch || "tools" in patch || "modelId" in patch || "onError" in patch || "fallbackValue" in patch || "maxToolCalls" in patch)) {
         return false; // locked content
       }
       Object.assign(node, patch);
@@ -95,10 +142,12 @@
       const wf = this.get(wfId);
       if (!wf || wf.running) return false;
       if (fromId === toId) return false;
+      const toNode = wf.nodes.find(n => n.id === toId);
+      if (toNode && toNode.agentType === "start") return false; // 任务起点不能被输入连线
       if (!this.isEditable(wf, fromId) || !this.isEditable(wf, toId)) return false;
       if (wf.edges.some(e => e.from === fromId && e.to === toId)) return false;
-      if (this.createsCycle(wf, fromId, toId)) return false;
-      wf.edges.push({ id: uid(wfId + "-e"), from: fromId, to: toId });
+      const isLoop = this.createsCycle(wf, fromId, toId);
+      wf.edges.push({ id: uid(wfId + "-e"), from: fromId, to: toId, isLoop });
       Store.notify("workflows");
       return true;
     },
@@ -108,8 +157,9 @@
       if (!wf || wf.running) return false;
       const edge = wf.edges.find(e => e.id === edgeId);
       if (!edge) return false;
-      if (!this.isEditable(wf, edge.from) || !this.isEditable(wf, edge.to)) return false;
       wf.edges = wf.edges.filter(e => e.id !== edgeId);
+      const ui = Store.get().ui;
+      if (ui.selectedEdgeId === edgeId) ui.selectedEdgeId = null;
       Store.notify("workflows");
       return true;
     },
@@ -134,7 +184,10 @@
     reset(wfId) {
       const wf = this.get(wfId);
       if (!wf || wf.running) return;
-      wf.nodes.forEach(n => { n.status = "waiting"; });
+      wf.nodes.forEach(n => {
+        n.status = "waiting";
+        n.skipped = false;
+      });
       wf.executed = false;
       Store.notify("workflows");
     },

@@ -2,16 +2,32 @@
    JIGSAW — 首页视图（欢迎页 / 空状态）
    ============================================================ */
 (function () {
-  const { h, el, Icons } = JIGSAW;
+  const { h, el, els, Icons } = JIGSAW;
   const Store = JIGSAW.Store;
 
   let ta = null;
+  let currentMode = "chat"; // "chat" | "workflow"
 
   function submit(text) {
     text = (text || "").trim();
-    if (!text) return;
-    const conv = JIGSAW.ChatService.create({ text });
-    JIGSAW.Router.navigate("/chat/" + conv.id);
+    if (currentMode === "chat") {
+      if (!text) return;
+      const conv = JIGSAW.ChatService.create({ text });
+      JIGSAW.Router.navigate("/chat/" + conv.id);
+    } else {
+      // 画布编排模式：即便留空也可以直接进入画布进行空白编排
+      const title = text ? text.slice(0, 48) : "未命名工作流";
+      const conv = JIGSAW.ChatService.create({ title, text: "" });
+      if (text) {
+        const wf = JIGSAW.WorkflowService.getForConversation(conv.id);
+        const startNode = wf && wf.nodes && wf.nodes.find(n => n.agentType === "start");
+        if (startNode) {
+          startNode.output = text;
+          Store.notify("workflows");
+        }
+      }
+      JIGSAW.Router.navigate("/chat/" + conv.id + "/workflow");
+    }
   }
 
   function renderModelSelect() {
@@ -26,6 +42,7 @@
     mount(container) {
       JIGSAW.setViewClass(container, "view-home");
       container.innerHTML = "";
+      currentMode = "chat"; // 每次挂载重置为默认对话模式
 
       const st = Store.get();
       const showTagline = st.settings.appearance.showHomeTagline;
@@ -33,13 +50,6 @@
       const view = h("div", { class: "view-home" },
         h("div", { class: "home-top" },
           h("button", { class: "icon-btn", "data-history": "1", title: "历史记录" }, Icons.icon("menu")),
-          h("div", { class: "home-brand-line" },
-            h("span", { class: "jigsaw-mark" },
-              h("span", { class: "cell" }), h("span", { class: "cell" }),
-              h("span", { class: "cell" }), h("span", { class: "cell" })
-            ),
-            h("span", null, "JIGSAW")
-          ),
           h("div", { class: "home-top-right" },
             h("button", { class: "icon-btn", "data-tools": "1", title: "工具" }, Icons.icon("tool")),
             h("button", { class: "icon-btn", "data-kb": "1", title: "知识库" }, Icons.icon("book")),
@@ -55,6 +65,16 @@
           h("div", { class: "home-wordmark" }, "JIGSAW"),
 
           h("div", { class: "home-input-wrap" },
+            h("div", { class: "home-mode-switch" },
+              h("button", { class: "home-mode-tab active", "data-mode": "chat", type: "button" },
+                Icons.icon("message", 12),
+                h("span", null, "对话模式 · Chat")
+              ),
+              h("button", { class: "home-mode-tab", "data-mode": "workflow", type: "button" },
+                Icons.icon("branch", 12),
+                h("span", null, "画布编排 · Workflow")
+              )
+            ),
             h("div", { class: "home-input" },
               h("textarea", { rows: "1", placeholder: "给 JIGSAW 发消息…", "data-input": "1"}),
               h("div", { class: "home-input-actions" },
@@ -85,6 +105,30 @@
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(ta.value); }
       });
       send.addEventListener("click", () => submit(ta.value));
+
+      // 双模式切换逻辑
+      const modeTabs = els(".home-mode-tab", view);
+      const updateMode = mode => {
+        currentMode = mode;
+        modeTabs.forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
+        if (mode === "chat") {
+          ta.placeholder = "给 JIGSAW 发消息…";
+          send.title = "发送";
+          send.innerHTML = Icons.icon("arrowUp", 16);
+          send.classList.remove("send-btn-wf");
+        } else {
+          ta.placeholder = "设定工作流初始任务目标（可选，留空直接进入空白画布）…";
+          send.title = "开启工作流编排";
+          send.innerHTML = Icons.icon("arrowUpRight", 16);
+          send.classList.add("send-btn-wf");
+        }
+      };
+      modeTabs.forEach(tab => {
+        tab.addEventListener("click", () => {
+          updateMode(tab.dataset.mode);
+          ta.focus();
+        });
+      });
 
       el("[data-history]", view).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
       el("[data-tools]", view).addEventListener("click", () => JIGSAW.Router.navigate("/tools"));

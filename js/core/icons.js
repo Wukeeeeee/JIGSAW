@@ -67,8 +67,17 @@
     "eye-off": '<path d="m3 3 18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 8.5 4 9.5 7-.4 1.2-1.3 2.7-2.6 4M6.6 6.6C4.4 8 2.8 10 2 12c1 3 4.5 7 9.5 7 .9 0 1.7-.1 2.5-.3"/>',
     link:      '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5"/>',
     arrowUp:   '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
+    arrowUpRight: '<path d="M7 17 17 7"/><path d="M7 7h10v10"/>',
     user:      '<circle cx="12" cy="8" r="4"/><path d="M4.5 20c1.5-3.2 4-4.5 7.5-4.5s6 1.3 7.5 4.5"/>',
-    jigsaw:    '<rect x="3.5" y="3.5" width="8" height="8"/><rect x="12.5" y="3.5" width="8" height="8"/><rect x="3.5" y="12.5" width="8" height="8"/><rect x="12.5" y="12.5" width="8" height="8"/>'
+    jigsaw:    '<rect x="3.5" y="3.5" width="8" height="8"/><rect x="12.5" y="3.5" width="8" height="8"/><rect x="3.5" y="12.5" width="8" height="8"/><rect x="12.5" y="12.5" width="8" height="8"/>',
+    "gate-and": '<path d="M4 6h6a6 6 0 0 1 6 6 6 6 0 0 1-6 6H4V6Z"/><line x1="16" y1="12" x2="21" y2="12"/><line x1="2" y1="8" x2="4" y2="8"/><line x1="2" y1="16" x2="4" y2="16"/>',
+    "gate-or":  '<path d="M4 5c3 3 3 11 0 14 6 0 10-2 13-7-3-5-7-7-13-7Z"/><line x1="17" y1="12" x2="22" y2="12"/><line x1="2" y1="8" x2="5.5" y2="8"/><line x1="2" y1="16" x2="5.5" y2="16"/>',
+    "gate-not": '<path d="M4 5v14l11-7-11-7Z"/><circle cx="18" cy="12" r="2.5"/><line x1="2" y1="12" x2="4" y2="12"/>',
+    condition: '<path d="M12 3 21 12l-9 9-9-9 9-9Z"/><path d="M9 12h6"/><path d="M12 9v6"/>',
+    loop:      '<path d="M20 13a7 7 0 1 1-2.1-5"/><path d="M20 4v5h-5"/>',
+    shield:    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
+    "shield-alert": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    skip:      '<polygon points="5,4 15,12 5,20"/><line x1="19" y1="5" x2="19" y2="19"/>'
   };
 
   function icon(name, size) {
