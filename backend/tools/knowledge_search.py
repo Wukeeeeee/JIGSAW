@@ -61,6 +61,17 @@ def run(args: dict) -> str:
     if not os.path.isdir(root):
         return "知识库目录不存在"
 
+    # 2.5 RAG 检索优先：关键词 + 向量 + RRF 融合（services/rag/kb_rag.py）
+    #     能命中就返回最相关片段；RAG 不可用（缺依赖/模型加载失败）时自动退回关键词扫描。
+    try:
+        from services.rag.kb_rag import knowledge_rag
+        rag_result = knowledge_rag.search(query, top_k=5)
+        if rag_result:
+            n = len(rag_result.splitlines())
+            return f"找到 {n} 处最相关片段：\n{rag_result}"
+    except Exception:
+        pass  # 退回下面的关键词扫描
+
     # 3. 关键词切分 + 归一：中英混排、整句提问也能命中
     #    "东京签证怎么办" → 先整句试，再拆成 2 字以上的词逐个试；
     #    英文统一转小写，避免 "DeepSeek"/"deepseek" 大小写不同就搜不到。
