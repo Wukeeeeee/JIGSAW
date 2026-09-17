@@ -20,6 +20,18 @@ _file_lock = threading.Lock()
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 MODELS_FILE = os.path.join(DATA_DIR, "models.json")
 CONVERSATIONS_FILE = os.path.join(DATA_DIR, "conversations.json")
+IMG_SETTINGS_FILE = os.path.join(DATA_DIR, "image_settings.json")
+
+
+def _load_image_settings() -> Dict[str, Any]:
+    try:
+        if os.path.exists(IMG_SETTINGS_FILE):
+            with open(IMG_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
 
 
 def _load_models() -> List[Dict[str, Any]]:
@@ -104,6 +116,7 @@ class Store:
                       "toolsEnabled": True, "temperature": 0.7},
             "workflow": {"defaultTemplate": "default", "executionSpeed": "normal",
                          "autoRun": False, "gridSize": 40},
+            "image": _load_image_settings(),
         }
 
     # ---- 自定义模型 ----

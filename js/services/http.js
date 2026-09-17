@@ -61,6 +61,12 @@
 
   const Http = {
     base, isRemote, request,
+    post(path, body, opts) {
+      return request(path, Object.assign({ method: "POST", body }, opts));
+    },
+    put(path, body, opts) {
+      return request(path, Object.assign({ method: "PUT", body }, opts));
+    },
 
     /**
      * chat(conversationId, message, model) → 创建异步聊天任务

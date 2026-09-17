@@ -82,6 +82,352 @@
     ];
   }
 
+  /* ---- 自定义语言模型（OpenAI 兼容接口）---- */
+  function buildCustomModelSection(s) {
+    const fName = textInput("", () => {});
+    const fModel = textInput("", () => {});
+    const fBase = textInput("", () => {});
+    const fKey = h("input", { class: "input", type: "password", placeholder: "sk-..." });
+
+    let editingId = null;
+
+    const doSave = () => {
+      const modelId = fModel.value.trim();
+      if (!modelId) { JIGSAW.Toast.show("请填写模型 ID"); return; }
+      const payload = {
+        name: fName.value.trim() || modelId,
+        modelId,
+        baseUrl: fBase.value.trim() || "https://api.openai.com/v1",
+        apiKey: fKey.value.trim()
+      };
+      if (editingId) {
+        JIGSAW.ModelService.updateCustom(editingId, payload);
+        JIGSAW.Toast.show("已保存模型修改");
+      } else {
+        JIGSAW.ModelService.addCustom(payload);
+        JIGSAW.Toast.show("已添加自定义模型");
+      }
+    };
+
+    const resetForm = () => {
+      editingId = null;
+      fName.value = ""; fModel.value = ""; fBase.value = ""; fKey.value = "";
+      addBtn.textContent = "添加模型";
+      cancelBtn.style.display = "none";
+      fName.focus();
+    };
+
+    const addBtn = h("button", { class: "btn btn-sm btn-primary" }, "添加模型");
+    addBtn.addEventListener("click", doSave);
+    const cancelBtn = h("button", { class: "btn btn-sm", style: { display: "none" } }, "取消");
+    cancelBtn.addEventListener("click", resetForm);
+    fModel.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doSave(); } });
+
+    const cmForm = h("div", { class: "cm-form" },
+      h("div", { class: "field" }, h("label", null, "名称"), fName),
+      h("div", { class: "field" }, h("label", null, "模型 ID（如 gpt-4o、deepseek-chat）"), fModel),
+      h("div", { class: "field full" }, h("label", null, "Base URL"), fBase),
+      h("div", { class: "field full" }, h("label", null, "API Key (密钥)"), fKey),
+      h("div", { class: "field full", style: { alignItems: "flex-start", gap: "var(--sp-2)" } }, addBtn, cancelBtn)
+    );
+
+    const custom = s.model.custom || [];
+    const cmList = h("div", null,
+      custom.length ? custom.map(m =>
+        h("div", { class: "custom-model-row" },
+          h("div", { class: "cm-info" },
+            h("div", { class: "cm-name" }, m.name),
+            h("div", { class: "cm-meta" }, m.modelId + " · " + (m.baseUrl || ""))
+          ),
+          h("div", { class: "cm-actions" },
+            h("button", { class: "icon-btn", "data-edit-cm": m.id, title: "设置模型" }, Icons.icon("edit", 13)),
+            h("button", { class: "icon-btn", "data-del-cm": m.id, title: "删除模型" }, Icons.icon("trash", 13))
+          )
+        )
+      ) : h("div", { class: "cm-empty" }, "还没有自定义模型——添加后即可在输入框旁的模型选择器中使用。")
+    );
+
+    els("[data-edit-cm]", cmList).forEach(b => b.addEventListener("click", () => {
+      const m = (Store.get().settings.model.custom || []).find(x => x.id === b.dataset.editCm);
+      if (!m) return;
+      editingId = m.id;
+      fName.value = m.name || "";
+      fModel.value = m.modelId || "";
+      fBase.value = m.baseUrl || "";
+      fKey.value = m.apiKey || "";
+      addBtn.textContent = "保存修改";
+      cancelBtn.style.display = "";
+      cmForm.scrollIntoView({ behavior: "smooth", block: "center" });
+      fName.focus();
+    }));
+
+    return [
+      h("div", { class: "settings-section-title", style: { marginTop: "var(--sp-5)" } }, "自定义语言模型"),
+      h("div", { class: "settings-section-sub" }, "添加 OpenAI 兼容接口的语言模型，添加后可在首页与聊天的模型选择器中选用。"),
+      h("div", { class: "settings-card" }, cmForm),
+      h("div", { class: "settings-card", style: { borderTop: "1px solid var(--line-1)" } }, cmList)
+    ];
+  }
+
+  /* ---- 生图模型（AI 绘画）配置（支持多模型管理） ---- */
+  function buildImageModelSection(s) {
+    const imgSettings = s.image || {};
+    // 严格按用户实际已配置的模型展示：过滤掉没有密钥或无效的项，有几个就展示几个，绝不预设空模型
+    let models = (Array.isArray(imgSettings.models) ? imgSettings.models : [])
+      .filter(m => m && m.modelId && m.apiKey && m.apiKey.trim());
+
+    // 若无 models 列表，尝试从旧单模型格式迁移
+    if (!models.length) {
+      const k = (imgSettings.apiKey || "").trim();
+      if (k) {
+        models = [{
+          id: "im-agnes",
+          name: imgSettings.provider || "Agnes AI (Flash)",
+          modelId: imgSettings.modelId || "agnes-image-2.5-flash",
+          baseUrl: imgSettings.baseUrl || "https://apihub.agnes-ai.com/v1",
+          apiKey: k,
+          aspectRatio: imgSettings.aspectRatio || "16:9"
+        }];
+      }
+    }
+
+    let activeModelId = imgSettings.activeModelId || (models[0] && models[0].id) || "";
+
+    const PRESETS = [
+      {
+        label: "Agnes AI",
+        name: "Agnes AI (Flash)",
+        modelId: "agnes-image-2.5-flash",
+        baseUrl: "https://apihub.agnes-ai.com/v1",
+        aspectRatio: "16:9"
+      },
+      {
+        label: "硅基流动 FLUX.1",
+        name: "硅基流动 (FLUX.1-schnell)",
+        modelId: "black-forest-labs/FLUX.1-schnell",
+        baseUrl: "https://api.siliconflow.cn/v1",
+        aspectRatio: "1:1"
+      },
+      {
+        label: "OpenAI DALL-E 3",
+        name: "OpenAI (DALL-E 3)",
+        modelId: "dall-e-3",
+        baseUrl: "https://api.openai.com/v1",
+        aspectRatio: "1:1"
+      }
+    ];
+
+    const fName = textInput("", () => {});
+    const fModel = textInput("", () => {});
+    const fBase = textInput("", () => {});
+    const fKey = h("input", {
+      class: "input",
+      type: "password",
+      placeholder: "在此输入该生图模型的 API Key (密钥)"
+    });
+    let currentRatio = "1:1";
+    const fRatio = selectCtrl([
+      ["1:1", "1:1（正方形，头像/通用）"],
+      ["16:9", "16:9（宽幅横图，桌面壁纸/风景）"],
+      ["9:16", "9:16（竖幅，手机壁纸/人像）"],
+      ["4:3", "4:3（标准横图）"],
+      ["3:4", "3:4（标准竖图）"]
+    ], currentRatio, v => { currentRatio = v; });
+
+    let editingId = null;
+
+    function syncBackendImage(newModels, newActiveId) {
+      const active = newModels.find(m => m.id === newActiveId) || newModels[0] || {};
+      const payload = {
+        activeModelId: active.id || "",
+        models: newModels,
+        provider: active.name || "custom",
+        baseUrl: active.baseUrl || "",
+        apiKey: active.apiKey || "",
+        modelId: active.modelId || "",
+        aspectRatio: active.aspectRatio || "1:1"
+      };
+      JIGSAW.SettingsService.update("image", payload);
+      if (JIGSAW.Http && JIGSAW.Http.request) {
+        JIGSAW.Http.request("/api/settings", { method: "PUT", body: { image: payload } }).catch(() => {});
+      }
+    }
+
+    const doSave = () => {
+      const modelId = fModel.value.trim();
+      const apiKey = fKey.value.trim();
+      if (!modelId) { JIGSAW.Toast.show("请填写生图模型 ID"); return; }
+      if (!apiKey) { JIGSAW.Toast.show("请填写该生图模型的 API Key 密钥"); return; }
+      const payload = {
+        name: fName.value.trim() || modelId,
+        modelId,
+        baseUrl: fBase.value.trim() || "https://api.openai.com/v1",
+        apiKey,
+        aspectRatio: currentRatio || "1:1"
+      };
+
+      if (editingId) {
+        models = models.map(m => m.id === editingId ? { ...m, ...payload } : m);
+        syncBackendImage(models, activeModelId);
+        JIGSAW.Toast.show("已保存生图模型修改");
+      } else {
+        const newId = "im-" + Math.random().toString(36).slice(2, 9);
+        models.push({ id: newId, ...payload });
+        if (!activeModelId) activeModelId = newId;
+        syncBackendImage(models, activeModelId);
+        JIGSAW.Toast.show("已添加生图模型");
+      }
+    };
+
+    const resetForm = () => {
+      editingId = null;
+      fName.value = ""; fModel.value = ""; fBase.value = ""; fKey.value = "";
+      currentRatio = "1:1";
+      addBtn.textContent = "添加生图模型";
+      cancelBtn.style.display = "none";
+    };
+
+    const addBtn = h("button", { class: "btn btn-sm btn-primary" }, "添加生图模型");
+    addBtn.addEventListener("click", doSave);
+    const cancelBtn = h("button", { class: "btn btn-sm", style: { display: "none" } }, "取消");
+    cancelBtn.addEventListener("click", resetForm);
+
+    const presetButtons = PRESETS.map(p => {
+      const b = h("button", { class: "btn btn-sm", type: "button" }, p.label);
+      b.addEventListener("click", () => {
+        fName.value = p.name;
+        fModel.value = p.modelId;
+        fBase.value = p.baseUrl;
+        fKey.value = p.apiKey || "";
+        currentRatio = p.aspectRatio || "1:1";
+        fKey.focus();
+      });
+      return b;
+    });
+    const clearPresetBtn = h("button", { class: "btn btn-sm", type: "button" }, "清空");
+    clearPresetBtn.addEventListener("click", resetForm);
+
+    const presetBar = h("div", {
+      style: { display: "flex", alignItems: "center", gap: "var(--sp-2)", padding: "var(--sp-3) var(--sp-4)", borderBottom: "1px solid var(--line-1)", flexWrap: "wrap" }
+    },
+      h("span", { style: { fontSize: "11px", color: "var(--text-3)", fontFamily: "var(--font-mono)" } }, "快捷预设："),
+      ...presetButtons,
+      clearPresetBtn
+    );
+
+    const imForm = h("div", { class: "cm-form" },
+      h("div", { class: "field" }, h("label", null, "模型名称（便于识别）"), fName),
+      h("div", { class: "field" }, h("label", null, "模型 ID（如 agnes-image-2.5-flash、flux）"), fModel),
+      h("div", { class: "field full" }, h("label", null, "Base URL（无需包含 /images/generations）"), fBase),
+      h("div", { class: "field full" }, h("label", null, "API Key (密钥)"), fKey),
+      h("div", { class: "field full" }, h("label", null, "默认画幅比例"), fRatio),
+      h("div", { class: "field full", style: { alignItems: "flex-start", gap: "var(--sp-2)" } }, addBtn, cancelBtn)
+    );
+
+    const imList = h("div", null,
+      models.length ? models.map(m => {
+        const isDefault = m.id === activeModelId;
+        return h("div", { class: "custom-model-row" },
+          h("div", { class: "cm-info" },
+            h("div", { class: "cm-name", style: { display: "flex", alignItems: "center", gap: "var(--sp-2)" } },
+              h("span", null, m.name),
+              isDefault ? h("span", { class: "badge badge-success" }, "默认") : null
+            ),
+            h("div", { class: "cm-meta" }, m.modelId + " · " + (m.baseUrl || "") + " · 比例: " + (m.aspectRatio || "1:1"))
+          ),
+          h("div", { class: "cm-actions" },
+            !isDefault ? h("button", { class: "btn btn-sm", "data-set-default-im": m.id, title: "设为默认模型" }, "设为默认") : null,
+            h("button", { class: "icon-btn", "data-test-im": m.id, title: "测试生成一张图片" }, Icons.icon("image", 13)),
+            h("button", { class: "icon-btn", "data-edit-im": m.id, title: "编辑模型" }, Icons.icon("edit", 13)),
+            h("button", { class: "icon-btn", "data-del-im": m.id, title: "删除模型" }, Icons.icon("trash", 13))
+          )
+        );
+      }) : h("div", { class: "cm-empty" }, "还没有生图模型——可点击上方快捷预设或手动添加。")
+    );
+
+    // 设为默认
+    els("[data-set-default-im]", imList).forEach(b => b.addEventListener("click", () => {
+      activeModelId = b.dataset.setDefaultIm;
+      syncBackendImage(models, activeModelId);
+      JIGSAW.Toast.show("已设为默认生图模型");
+    }));
+
+    // 测试
+    els("[data-test-im]", imList).forEach(b => b.addEventListener("click", async () => {
+      const m = models.find(x => x.id === b.dataset.testIm);
+      if (!m) return;
+      if (!m.apiKey) {
+        JIGSAW.Toast.show(`请先为「${m.name}」填写 API Key 密钥`);
+        return;
+      }
+      b.disabled = true;
+      JIGSAW.Toast.show(`正在使用「${m.name}」测试生图...`);
+      try {
+        const resp = await JIGSAW.Http.request("/api/tools/execute", {
+          method: "POST",
+          body: {
+            name: "generate_image",
+            args: {
+              prompt: "A sleek geometric cube on black background, minimal, studio lighting",
+              model: m.modelId,
+              aspect_ratio: m.aspectRatio || "1:1"
+            }
+          }
+        });
+        if (resp && resp.ok) {
+          JIGSAW.Toast.show(`「${m.name}」生图测试成功！已生成图片`);
+        } else {
+          JIGSAW.Toast.show(`测试失败: ` + ((resp && resp.result) || "未知原因"));
+        }
+      } catch (err) {
+        JIGSAW.Toast.show(`测试失败: ` + (err.message || "网络异常"));
+      } finally {
+        b.disabled = false;
+      }
+    }));
+
+    // 编辑
+    els("[data-edit-im]", imList).forEach(b => b.addEventListener("click", () => {
+      const m = models.find(x => x.id === b.dataset.editIm);
+      if (!m) return;
+      editingId = m.id;
+      fName.value = m.name || "";
+      fModel.value = m.modelId || "";
+      fBase.value = m.baseUrl || "";
+      fKey.value = m.apiKey || "";
+      currentRatio = m.aspectRatio || "1:1";
+      addBtn.textContent = "保存修改";
+      cancelBtn.style.display = "";
+      imForm.scrollIntoView({ behavior: "smooth", block: "center" });
+      fName.focus();
+    }));
+
+    // 删除
+    els("[data-del-im]", imList).forEach(b => b.addEventListener("click", async () => {
+      const m = models.find(x => x.id === b.dataset.delIm);
+      const ok = await JIGSAW.PromptModal.confirm({
+        title: "删除生图模型",
+        message: `确定删除生图模型「${m ? m.name : b.dataset.delIm}」？`,
+        okText: "删除",
+        danger: true
+      });
+      if (!ok) return;
+      models = models.filter(x => x.id !== b.dataset.delIm);
+      if (activeModelId === b.dataset.delIm) {
+        activeModelId = (models[0] && models[0].id) || "";
+      }
+      syncBackendImage(models, activeModelId);
+      JIGSAW.Toast.show("已删除生图模型");
+    }));
+
+    return [
+      h("div", { class: "settings-section-title", style: { marginTop: "var(--sp-5)" } }, "生图模型（AI 绘画）"),
+      h("div", { class: "settings-section-sub" }, "支持配置多款兼容 OpenAI /v1/images/generations 规范的生图模型。当配置了多个模型时，AI 在生成前会弹出交互选项询问你想使用哪个模型。"),
+      h("div", { class: "settings-card" }, presetBar, imForm),
+      h("div", { class: "settings-card", style: { borderTop: "1px solid var(--line-1)" } }, imList)
+    ];
+  }
+
   function sectionModel(s) {
     // 默认模型下拉：自绘直角，选项来自用户已添加的自定义模型
     const defaultSel = JIGSAW.Dropdown.create(
@@ -92,7 +438,7 @@
     );
     return [
       h("div", { class: "settings-section-title" }, "模型"),
-      h("div", { class: "settings-section-sub" }, "模型由你在下方 API 分区自行添加，这里设置新建会话的默认模型。"),
+      h("div", { class: "settings-section-sub" }, "管理会话语言模型通用参数、自定义语言模型以及生图（AI 绘画）模型密钥配置。"),
       h("div", { class: "settings-card" },
         row("默认模型", "用于新建会话。", defaultSel),
         row("视觉能力", "允许输入图片。",
@@ -101,7 +447,9 @@
           toggleCtrl(s.model.toolsEnabled, v => JIGSAW.SettingsService.update("model", { toolsEnabled: v }))),
         row("采样温度", "模拟回复的随机程度。",
           rangeCtrl(s.model.temperature, 0, 1, 0.1, v => JIGSAW.SettingsService.update("model", { temperature: v })))
-      )
+      ),
+      ...buildCustomModelSection(s),
+      ...buildImageModelSection(s)
     ];
   }
 
@@ -127,91 +475,16 @@
     };
     testBtn.addEventListener("click", onTest);
 
-    /* ---- 自定义模型（OpenAI 兼容接口）---- */
-    const fName = textInput("", () => {});
-    const fModel = textInput("", () => {});
-    const fBase = textInput("", () => {});
-    const fKey = textInput("", () => {});
-    fKey.type = "password";
-
-    // editingId = null → 新增模式；有值 → 正在编辑该模型
-    let editingId = null;
-
-    const doSave = () => {
-      const modelId = fModel.value.trim();
-      if (!modelId) { JIGSAW.Toast.show("请填写模型 ID"); return; }
-      const payload = {
-        name: fName.value.trim() || modelId,
-        modelId,
-        baseUrl: fBase.value.trim() || "https://api.openai.com/v1",
-        apiKey: fKey.value.trim()
-      };
-      if (editingId) {
-        JIGSAW.ModelService.updateCustom(editingId, payload);
-        JIGSAW.Toast.show("已保存模型修改");
-      } else {
-        JIGSAW.ModelService.addCustom(payload);
-        JIGSAW.Toast.show("已添加自定义模型");
-      }
-      // 保存后 store 变更会自动重渲染本页，表单随之清空回到“添加”模式
-    };
-
-    const resetForm = () => {
-      editingId = null;
-      fName.value = ""; fModel.value = ""; fBase.value = ""; fKey.value = "";
-      addBtn.textContent = "添加模型";
-      cancelBtn.style.display = "none";
-      fName.focus();
-    };
-
-    const addBtn = h("button", { class: "btn btn-sm btn-primary" }, "添加模型");
-    addBtn.addEventListener("click", doSave);
-    const cancelBtn = h("button", { class: "btn btn-sm", style: { display: "none" } }, "取消");
-    cancelBtn.addEventListener("click", resetForm);
-    fModel.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doSave(); } });
-
-    const cmForm = h("div", { class: "cm-form" },
-      h("div", { class: "field" }, h("label", null, "名称"), fName),
-      h("div", { class: "field" }, h("label", null, "模型 ID（如 gpt-4o）"), fModel),
-      h("div", { class: "field full" }, h("label", null, "Base URL"), fBase),
-      h("div", { class: "field full" }, h("label", null, "API Key"), fKey),
-      h("div", { class: "field full", style: { alignItems: "flex-start" } }, addBtn, cancelBtn)
-    );
-
-    const custom = s.model.custom || [];
-    const cmList = h("div", null,
-      custom.length ? custom.map(m =>
-        h("div", { class: "custom-model-row" },
-          h("div", { class: "cm-info" },
-            h("div", { class: "cm-name" }, m.name),
-            h("div", { class: "cm-meta" }, m.modelId + " · " + (m.baseUrl || ""))
-          ),
-          h("div", { class: "cm-actions" },
-            h("button", { class: "icon-btn", "data-edit-cm": m.id, title: "设置模型" }, Icons.icon("edit", 13)),
-            h("button", { class: "icon-btn", "data-del-cm": m.id, title: "删除模型" }, Icons.icon("trash", 13))
-          )
-        )
-      ) : h("div", { class: "cm-empty" }, "还没有自定义模型——添加后即可在输入框旁的模型选择器中使用。")
-    );
-
-    // “设置”按钮：把该模型的值回填到上方表单，进入编辑模式
-    els("[data-edit-cm]", cmList).forEach(b => b.addEventListener("click", () => {
-      const m = (Store.get().settings.model.custom || []).find(x => x.id === b.dataset.editCm);
-      if (!m) return;
-      editingId = m.id;
-      fName.value = m.name || "";
-      fModel.value = m.modelId || "";
-      fBase.value = m.baseUrl || "";
-      fKey.value = m.apiKey || "";
-      addBtn.textContent = "保存修改";
-      cancelBtn.style.display = "";
-      cmForm.scrollIntoView({ behavior: "smooth", block: "center" });
-      fName.focus();
-    }));
+    const toModelBtn = h("button", { class: "btn btn-sm" }, "前往模型设置");
+    toModelBtn.addEventListener("click", () => {
+      current = "model";
+      els(".settings-nav-item", container).forEach(x => x.classList.toggle("active", x.dataset.sec === "model"));
+      renderContent();
+    });
 
     return [
-      h("div", { class: "settings-section-title" }, "API"),
-      h("div", { class: "settings-section-sub" }, "为你的真实 LLM / Agent 运行时预留，当前为模拟实现。"),
+      h("div", { class: "settings-section-title" }, "API 运行时"),
+      h("div", { class: "settings-section-sub" }, "设置前端与后端 FastAPI 服务的通信模式与接口地址。"),
       h("div", { class: "settings-card" },
         row("数据源", "本地 Mock 直接在前端模拟回复；后端 API 将聊天请求发送到 FastAPI 服务。",
           selectCtrl([["mock", "本地 Mock"], ["remote", "后端 API"]], s.api.mode, v => JIGSAW.SettingsService.update("api", { mode: v }))),
@@ -220,15 +493,12 @@
         row("接口地址", "前端连接后端服务的地址（本地后端为 http://127.0.0.1:8000）。",
           textInput(s.api.baseUrl, v => JIGSAW.SettingsService.update("api", { baseUrl: v }))),
         row("连接状态", "测试连接会向后端 /api/health 发送探测请求。",
-          h("span", { class: "badge " + (s.api.connected ? "badge-success" : "badge-waiting") }, s.api.connected ? "已连接" : "未连接"))
-      ),
-      h("div", { class: "settings-card" },
+          h("span", { class: "badge " + (s.api.connected ? "badge-success" : "badge-waiting") }, s.api.connected ? "已连接" : "未连接")),
         row("测试连接", "向配置的接口发送探测请求。", testBtn)
       ),
-      h("div", { class: "settings-section-title", style: { marginTop: "var(--sp-5)" } }, "自定义模型"),
-      h("div", { class: "settings-section-sub" }, "添加 OpenAI 兼容接口的模型，添加后可在首页与聊天的模型选择器中选用。"),
-      h("div", { class: "settings-card" }, cmForm),
-      h("div", { class: "settings-card", style: { borderTop: "1px solid var(--line-1)" } }, cmList)
+      h("div", { class: "settings-card", style: { marginTop: "var(--sp-3)" } },
+        row("模型与密钥配置", "语言对话模型与生图模型的配置与密钥，已整合至「模型」中统一管理。", toModelBtn)
+      )
     ];
   }
 
@@ -337,7 +607,15 @@
     ];
   }
 
-  const RENDERERS = { general: sectionGeneral, appearance: sectionAppearance, model: sectionModel, api: sectionApi, workflow: sectionWorkflow, stats: sectionStats, about: sectionAbout };
+  const RENDERERS = {
+    general: sectionGeneral,
+    appearance: sectionAppearance,
+    model: sectionModel,
+    api: sectionApi,
+    workflow: sectionWorkflow,
+    stats: sectionStats,
+    about: sectionAbout
+  };
 
   /* ---- 视图 ---- */
   function renderContent(keepScroll) {

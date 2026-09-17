@@ -131,7 +131,65 @@ JIGSAW 自身信息（用户问"我的知识库在哪 / 资料存在哪个文件
 2. 问题要具体、可回答；给选项时一律用 options 参数，不要强行替用户选择。
 3. 用户回答后，按回答继续执行；用户取消时，停止该操作并说明，不要强行继续。
 4. 简单查询、纯信息类问题不要用 AskUser，直接回答。
-5. 同一个问题只问一次：用户已经回答过，就按回答继续，不要重复提出同样的问题。"""
+5. 同一个问题只问一次：用户已经回答过，就按回答继续，不要重复提出同样的问题。
+
+图像生成与展示（generate_image 工具）：
+1. 当用户希望画画、创作插画、生成海报或图片时，调用 generate_image 工具。
+2. 【硬性要求】当生图工具返回图片路径后，你在最终回答中必须原样包含该图片的 Markdown 贴图语法：
+   ![画面描述](图片路径)
+   例如：![蔚蓝海水与浪花](E:/my_repo/Jigsaw/backend/data/generated_images/agnes_xxx.png)
+   严禁只把路径作为纯文本或代码输出！必须原样带上 ![]() 语法，前端界面才能直接把大图渲染在气泡里给用户看。
+
+科学绘图与数据可视化（Python / MATLAB / 代码作图）：
+1. 当用户需要进行数据分析、绘制数学函数图像、统计图表（折线图、柱状图、散点图、饼图、热力图、三维曲面等）或工程仿真图时：
+   - 优先编写 Python 脚本（使用 matplotlib、seaborn、pandas、numpy 等），利用 shell 工具运行脚本并将图表保存为本地图片（建议存为 .png 或 .svg）；
+   - 若用户指定使用 MATLAB，可编写 MATLAB 绘图代码并通过 shell 工具运行导出图片；
+2. 【图表展示硬性要求】：
+   图表文件生成后，你在最终回复中【必须】原样包含该本地图片的 Markdown 贴图语法：
+   ![图表名称](图片完整绝对路径)
+   例如：![阻尼正弦衰减曲线图](E:/my_repo/Jigsaw/sine_wave.png)
+   严禁只输出路径文字！原样带上 ![]() 贴图语法后，JIGSAW 前端界面就会直接将图表大图渲染在气泡里，支持点击放大全屏预览！"""
+
+
+def _build_system_prompt() -> str:
+    """动态组装包含当前已配置生图模型列表与确认规则的 System Prompt"""
+    try:
+        from tools.generate_image import get_available_image_models
+        img_models = get_available_image_models()
+    except Exception:
+        img_models = []
+
+    model_rules = ""
+    if len(img_models) > 1:
+        model_list_str = "\n".join([
+            f"- {m['name']} (模型 ID: `{m['modelId']}`)" + ("【当前默认】" if m.get("isDefault") else "")
+            for m in img_models
+        ])
+        options_demo = [m['name'] + ("（推荐）" if m.get('isDefault') else "") for m in img_models[:4]]
+        model_rules = f"""
+
+【生图前向用户确认模型的硬性规则】：
+当前系统共配置了 {len(img_models)} 个可用生图模型：
+{model_list_str}
+
+1. 当用户提出绘图需求（如画画、生成海报、创作插画等）时：
+   - 【如果用户未在本次消息中明确指定使用哪款模型】：
+     在真正调用 generate_image 之前，【必须先调用 AskUser 工具】向用户提问，让用户确认想用哪个模型！
+     - question: "你想使用哪个生图模型进行本次创作？"
+     - options: {options_demo}
+     必须等待用户在前端交互弹窗中点选回答后，你再调用 generate_image，并把用户选中的模型作为 model 参数传入！
+   - 【如果用户已在指令中明确指定了模型】（例如"用 FLUX 画..."、"用 DALL-E 绘制..."、"用 Agnes 生成..."）：
+     直接识别用户的模型意图，调用 generate_image(prompt=..., model=...)，无需再次提问。
+2. 每次完成绘图后，输出 Markdown 贴图语法：![画面描述](本地路径)。
+"""
+    elif len(img_models) == 1:
+        m = img_models[0]
+        model_rules = f"""
+
+当前系统已配置单一生图模型：{m['name']} (ID: `{m['modelId']}`)。
+用户提出绘图需求时，直接调用 generate_image 生成即可，无需多余询问。
+"""
+    return system_prompt + model_rules
 
 
 
@@ -318,7 +376,7 @@ def reply(conversation_id: str, message: str, model: dict | None = None,
     )
 
     # ③ 组装消息：system + 历史（chat.py 先存后取，历史已含当前句，不会重复）
-    messages = [SystemMessage(content=system_prompt)]
+    messages = [SystemMessage(content=_build_system_prompt())]
     for m in store.get_messages(conversation_id):
         if m.get("role") == "user":
             messages.append(HumanMessage(content=m["text"]))

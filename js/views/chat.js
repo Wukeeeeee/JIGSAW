@@ -20,15 +20,24 @@
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
 
+  let scrollRaf = null;
   function scrollToBottom(force) {
     if (!scrollEl) return;
-    const nearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 120;
-    if (force || nearBottom) scrollEl.scrollTop = scrollEl.scrollHeight;
+    const distanceToBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+    // 吸附阈值 48px：确保只有用户处于最底部时才平滑跟随；用户向上翻看历史时不强行拖拽
+    const nearBottom = distanceToBottom < 48;
+    if (!force && !nearBottom) return;
+
+    if (scrollRaf) cancelAnimationFrame(scrollRaf);
+    scrollRaf = requestAnimationFrame(() => {
+      scrollEl.scrollTop = scrollEl.scrollHeight;
+      scrollRaf = null;
+    });
   }
 
   /** 工具标签行：AI 这轮用过哪些工具（图标 + 名称） */
-  function buildToolsRow(toolsUsed) {
-    return h("div", { class: "msg-tools" },
+  function buildToolsRow(toolsUsed, compact) {
+    return h("div", { class: "msg-tools" + (compact ? " msg-tools-compact" : "") },
       (toolsUsed || []).map(name => {
         const meta = JIGSAW.ToolService.getMeta(name);
         return h("span", { class: "msg-tool-tag" },
@@ -82,11 +91,157 @@
     return wrap;
   }
 
+  /**
+   * 思考与工具执行过程块：固定位于消息气泡上方。
+   * 运行中：展示旋转指示点、实时进度文案与 SVG 步骤轨迹；
+   * 完成后：优雅折叠为工具调用总结，支持随时展开回看，绝不突然从 DOM 中被销毁或导致高度骤缩。
+   */
+  function buildThoughtBlock(msg, isStream) {
+    const hasSteps = msg.steps && msg.steps.length > 0;
+    const hasTools = msg.toolsUsed && msg.toolsUsed.length > 0;
+    const isRunning = isStream && (msg.thinkingStatus !== "done" || !msg.text);
+
+    if (!hasSteps && !hasTools && !isRunning && !msg.thinkingText) {
+      return null;
+    }
+
+    const wrap = h("div", { class: "msg-thought" + (isRunning ? " running" : " completed") });
+
+    let titleText = "";
+    if (isRunning) {
+      titleText = msg.thinkingText || (msg.status === "queued" ? "排队中…" : "正在思考…");
+    } else {
+      const toolCount = (msg.toolsUsed || []).length || (msg.steps || []).length;
+      titleText = toolCount > 0
+        ? `已调用 ${toolCount} 项工具`
+        : "思考与执行完成";
+    }
+
+    const header = h("div", { class: "msg-thought-header" },
+      h("div", { class: "msg-thought-left" },
+        isRunning
+          ? h("span", { class: "thought-spinner" })
+          : Icons.icon("check", 11),
+        h("span", { class: "msg-thought-title" }, titleText)
+      ),
+      h("div", { class: "msg-thought-right" },
+        (!isRunning && hasTools) ? buildToolsRow(msg.toolsUsed, true) : null,
+        hasSteps ? h("span", { class: "msg-thought-toggle", title: "展开/收起执行步骤" },
+          h("span", { class: "toggle-txt" }, isRunning ? "步骤" : "详情"),
+          Icons.icon("chevronDown", 11)
+        ) : null
+      )
+    );
+
+    wrap.appendChild(header);
+
+    if (hasSteps) {
+      const body = h("div", { class: "msg-thought-body" },
+        buildStepsRow(msg.steps)
+      );
+      // 运行中默认展开，完成后默认收起
+      const isCollapsed = !isRunning;
+      if (isCollapsed) body.classList.add("collapsed");
+      wrap.appendChild(body);
+
+      header.addEventListener("click", () => {
+        body.classList.toggle("collapsed");
+        const arrow = header.querySelector(".msg-thought-toggle svg");
+        if (arrow) arrow.style.transform = body.classList.contains("collapsed") ? "rotate(0deg)" : "rotate(180deg)";
+      });
+    }
+
+    return wrap;
+  }
+
+  function ensureCaret(bubble, isStream) {
+    let caret = bubble.querySelector(".caret");
+    if (isStream) {
+      if (!caret) {
+        caret = h("span", { class: "caret" });
+        bubble.appendChild(caret);
+      } else if (bubble.lastChild !== caret) {
+        bubble.appendChild(caret);
+      }
+    } else if (caret) {
+      caret.remove();
+    }
+  }
+
+  /**
+   * DOM-Preserving 增量更新气泡 HTML：
+   * 在流式打字追加新文字时，保护已经渲染并加载完成的 .msg-img-wrap 图片 DOM 不被重复销毁与重新挂载。
+   * 彻底解决打字机每 18ms 触发 innerHTML 重建导致 <img> 瞬时高度归零所引发的剧烈上下震颤。
+   */
+  function patchBubbleHtml(bubble, newHtml, isStream) {
+    if (bubble.dataset.lastHtml === newHtml) {
+      ensureCaret(bubble, isStream);
+      return;
+    }
+    bubble.dataset.lastHtml = newHtml;
+
+    if (!bubble.querySelector(".msg-img-wrap") && !newHtml.includes("msg-img-wrap")) {
+      bubble.innerHTML = newHtml;
+      ensureCaret(bubble, isStream);
+      return;
+    }
+
+    const temp = document.createElement("div");
+    temp.innerHTML = newHtml;
+
+    const oldNodes = Array.from(bubble.childNodes).filter(n => !n.classList || !n.classList.contains("caret"));
+    const newNodes = Array.from(temp.childNodes);
+
+    let i = 0;
+    while (i < newNodes.length && i < oldNodes.length) {
+      const oldNode = oldNodes[i];
+      const newNode = newNodes[i];
+
+      // 相同图片节点（相同 data-img-src），保留旧有的真实 DOM 节点（保留已加载的 img 尺寸），不作替换
+      if (oldNode.nodeType === 1 && newNode.nodeType === 1 &&
+          oldNode.classList.contains("msg-img-wrap") &&
+          newNode.classList.contains("msg-img-wrap") &&
+          oldNode.dataset.imgSrc === newNode.dataset.imgSrc) {
+        i++;
+        continue;
+      }
+
+      // 节点 HTML 一致，跳过
+      if (oldNode.nodeType === 1 && newNode.nodeType === 1 && oldNode.outerHTML === newNode.outerHTML) {
+        i++;
+        continue;
+      }
+
+      if (oldNode.nodeType === 3 && newNode.nodeType === 3 && oldNode.nodeValue === newNode.nodeValue) {
+        i++;
+        continue;
+      }
+
+      bubble.replaceChild(newNode.cloneNode(true), oldNode);
+      i++;
+    }
+
+    while (bubble.childNodes.length > newNodes.length) {
+      const last = bubble.lastChild;
+      if (last.classList && last.classList.contains("caret")) break;
+      bubble.removeChild(last);
+    }
+
+    while (i < newNodes.length) {
+      bubble.appendChild(newNodes[i].cloneNode(true));
+      i++;
+    }
+
+    ensureCaret(bubble, isStream);
+  }
+
   function messageEl(msg, conv) {
     const isUser = msg.role === "user";
-    // 用 byId：模型被删掉后不再"张冠李戴"显示成列表里第一个模型
+    const isStream = msg.status === "streaming";
     const model = JIGSAW.ModelService.byId(msg.modelId);
-    const wrap = h("div", { class: "msg " + (isUser ? "msg-user" : "msg-assistant") + (msg.status === "streaming" ? " msg-sending" : ""), "data-mid": msg.id },
+    const thoughtEl = isUser ? null : buildThoughtBlock(msg, isStream);
+
+    const wrap = h("div", { class: "msg " + (isUser ? "msg-user" : "msg-assistant") + (isStream ? " msg-sending" : ""), "data-mid": msg.id },
       h("div", { class: "msg-avatar" }, Icons.icon(isUser ? "user" : "jigsaw", 14)),
       h("div", { class: "msg-content" },
         h("div", { class: "msg-meta" },
@@ -94,21 +249,23 @@
           JIGSAW.Store.get().settings.appearance.showTimestamps ? h("span", { class: "time" }, timeLabel(msg.createdAt)) : null,
           h("span", { class: "model-tag" }, model ? model.name : "")
         ),
-        isUser || !(msg.toolsUsed && msg.toolsUsed.length) ? null : buildToolsRow(msg.toolsUsed),
-        h("div", { class: "msg-bubble" }, msg.text ? Markdown.render(msg.text) : (msg.status === "streaming" ? "" : "")),
-        (isUser || msg.status !== "streaming" || !(msg.steps && msg.steps.length)) ? null : buildStepsRow(msg.steps),
+        thoughtEl,
+        h("div", { class: "msg-bubble" }, msg.text ? Markdown.render(msg.text) : ""),
         h("div", { class: "msg-actions" },
           h("button", { class: "icon-btn icon-btn-sm", "data-act": "copy", title: "复制" }, Icons.icon("copy", 13)),
           isUser ? null : h("button", { class: "icon-btn icon-btn-sm", "data-act": "regenerate", title: "重新生成" }, Icons.icon("refresh", 13)),
-          (isUser || msg.status !== "streaming") ? null : h("button", { class: "icon-btn icon-btn-sm msg-cancel", "data-act": "cancel", title: "终止此任务" }, Icons.icon("x", 13))
+          (isUser || !isStream) ? null : h("button", { class: "icon-btn icon-btn-sm msg-cancel", "data-act": "cancel", title: "终止此任务" }, Icons.icon("x", 13))
         )
       )
     );
 
     if (!isUser) {
-      const caret = h("span", { class: "caret" });
       const bubble = el(".msg-bubble", wrap);
-      if (msg.status === "streaming") bubble.appendChild(caret);
+      if (isStream && msg.text) ensureCaret(bubble, true);
+      // 正在思考且尚无正文回复时隐藏气泡框，避免空白气泡造成视觉跳跃
+      if (!msg.text && isStream) {
+        bubble.style.display = "none";
+      }
     }
 
     const actions = els(".msg-actions [data-act]", wrap);
@@ -133,7 +290,6 @@
     const messages = conv.messages;
     const seen = new Set();
 
-    // update / create
     messages.forEach(msg => {
       seen.add(msg.id);
       let node = msgEls.get(msg.id);
@@ -144,35 +300,57 @@
         list.appendChild(node);
         scrollToBottom(true);
       } else {
-        // live-update streaming bubble（每次更新都重渲染内容，done 后光标自然消失）
-        const bubble = el(".msg-bubble", node);
+        const isUser = msg.role === "user";
         const isStream = msg.status === "streaming";
-        bubble.innerHTML = msg.text ? Markdown.render(msg.text) : "";
-        if (isStream) bubble.appendChild(h("span", { class: "caret" }));
         node.classList.toggle("msg-sending", isStream);
-        // tools tag：流式开始时 toolsUsed 才就位，此时补上标签行
-        const hasTools = msg.toolsUsed && msg.toolsUsed.length;
-        let tagRow = el(".msg-tools", node);
-        if (hasTools && !tagRow) { bubble.before(buildToolsRow(msg.toolsUsed)); }
-        else if (!hasTools && tagRow) { tagRow.remove(); }
-        // 实时步骤轨迹：streaming 时跟随后端 steps 更新，结束后移除（折叠成工具标签）
-        const stepList = (msg.status === "streaming") ? (msg.steps || []) : null;
-        let stepRow = el(".msg-steps", node);
-        if (stepList && stepList.length) {
-          if (!stepRow) bubble.after(buildStepsRow(stepList));
-          else stepRow.replaceWith(buildStepsRow(stepList));
-        } else if (stepRow) { stepRow.remove(); }
-        // model tag update
-        const tag = el(".model-tag", node);
-        if (tag) tag.textContent = (JIGSAW.ModelService.byId(msg.modelId) || {}).name || "";
-        // 终止按钮：streaming（排队/思考/等回答）时显示，完成/失败后移除
-        let cancelBtn = el(".msg-cancel", node);
-        if (isStream && !cancelBtn) {
-          const cb = h("button", { class: "icon-btn icon-btn-sm msg-cancel", "data-act": "cancel", title: "终止此任务" }, Icons.icon("x", 13));
-          const actions = el(".msg-actions", node);
-          if (actions) { actions.appendChild(cb); cb.addEventListener("click", () => JIGSAW.ChatService.cancel(convId)); }
-        } else if (!isStream && cancelBtn) {
-          cancelBtn.remove();
+
+        if (!isUser) {
+          // 1. 思考与步骤执行块更新（稳定位于顶部，绝不突然被销毁或换位）
+          let thoughtEl = el(".msg-thought", node);
+          const newThought = buildThoughtBlock(msg, isStream);
+          if (newThought) {
+            if (!thoughtEl) {
+              const metaEl = el(".msg-meta", node);
+              if (metaEl) metaEl.after(newThought);
+            } else {
+              const oldBody = el(".msg-thought-body", thoughtEl);
+              const wasCollapsed = oldBody && oldBody.classList.contains("collapsed");
+              thoughtEl.replaceWith(newThought);
+              if (wasCollapsed) {
+                const newBody = el(".msg-thought-body", newThought);
+                if (newBody) newBody.classList.add("collapsed");
+              }
+            }
+          } else if (thoughtEl) {
+            thoughtEl.remove();
+          }
+
+          // 2. 正文气泡平滑更新
+          const bubble = el(".msg-bubble", node);
+          if (bubble) {
+            if (!msg.text && isStream) {
+              bubble.style.display = "none";
+              bubble.innerHTML = "";
+            } else {
+              bubble.style.display = "";
+              const renderedHtml = msg.text ? Markdown.render(msg.text) : "";
+              patchBubbleHtml(bubble, renderedHtml, isStream);
+            }
+          }
+
+          // 3. 模型标签更新
+          const tag = el(".model-tag", node);
+          if (tag) tag.textContent = (JIGSAW.ModelService.byId(msg.modelId) || {}).name || "";
+
+          // 4. 终止按钮管理
+          let cancelBtn = el(".msg-cancel", node);
+          if (isStream && !cancelBtn) {
+            const cb = h("button", { class: "icon-btn icon-btn-sm msg-cancel", "data-act": "cancel", title: "终止此任务" }, Icons.icon("x", 13));
+            const actions = el(".msg-actions", node);
+            if (actions) { actions.appendChild(cb); cb.addEventListener("click", () => JIGSAW.ChatService.cancel(convId)); }
+          } else if (!isStream && cancelBtn) {
+            cancelBtn.remove();
+          }
         }
       }
     });
@@ -431,6 +609,65 @@
     qEl.classList.remove("hidden");
   }
 
+  function openLightbox(src, rawSrc, alt) {
+    const old = document.querySelector(".img-lightbox");
+    if (old) old.remove();
+
+    const titleText = alt || (rawSrc ? rawSrc.split("/").pop().split("\\").pop() : "图片预览");
+
+    const copyBtn = h("button", { class: "img-lightbox-btn", title: "复制图片地址或原始路径" },
+      Icons.icon("copy", 12),
+      h("span", null, "复制路径")
+    );
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const textToCopy = rawSrc || src;
+      navigator.clipboard.writeText(textToCopy).then(() => JIGSAW.Toast.show("已复制路径：" + textToCopy));
+    });
+
+    const openBtn = h("button", { class: "img-lightbox-btn", title: "在新标签页打开原图" },
+      Icons.icon("arrowUpRight", 12),
+      h("span", null, "原图打开")
+    );
+    openBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.open(src, "_blank");
+    });
+
+    const closeBtn = h("button", { class: "img-lightbox-btn btn-close", title: "关闭 (Esc)" },
+      Icons.icon("x", 14)
+    );
+
+    const lightbox = h("div", { class: "img-lightbox" },
+      h("div", { class: "img-lightbox-topbar" },
+        h("div", { class: "img-lightbox-title", title: titleText }, titleText),
+        h("div", { class: "img-lightbox-actions" }, copyBtn, openBtn, closeBtn)
+      ),
+      h("div", { class: "img-lightbox-body" },
+        h("img", { class: "img-lightbox-img", src, alt: titleText })
+      )
+    );
+
+    const close = () => {
+      window.removeEventListener("keydown", onKey);
+      lightbox.remove();
+    };
+
+    const onKey = (e) => {
+      if (e.key === "Escape") close();
+    };
+
+    closeBtn.addEventListener("click", close);
+    el(".img-lightbox-body", lightbox).addEventListener("click", (e) => {
+      if (e.target !== el(".img-lightbox-img", lightbox)) {
+        close();
+      }
+    });
+
+    window.addEventListener("keydown", onKey);
+    document.body.appendChild(lightbox);
+  }
+
   const Chat = {
     mount(root, params) {
       container = root;
@@ -470,6 +707,26 @@
       // initial messages
       const list = h("div", { class: "chat-scroll" });
       bodyEl.appendChild(list);
+
+      // 图片点击呼出大图预览灯箱
+      list.addEventListener("click", e => {
+        const wrap = e.target.closest(".msg-img-wrap");
+        if (wrap) {
+          const img = el("img", wrap);
+          const src = wrap.dataset.imgSrc || (img && img.src);
+          const rawSrc = wrap.dataset.rawSrc || src;
+          const alt = wrap.dataset.alt || (img && img.alt) || "";
+          if (src) openLightbox(src, rawSrc, alt);
+        }
+      });
+
+      // 图片自然加载完毕时，若用户正处于底部，平滑吸附到底部（用户手动向上翻看时不抢夺视角）
+      list.addEventListener("load", e => {
+        if (e.target && e.target.tagName === "IMG") {
+          scrollToBottom(false);
+        }
+      }, true);
+
       msgEls = new Map();
       conv.messages.forEach(m => {
         const node = messageEl(m, conv);
@@ -499,6 +756,8 @@
       unsubs.forEach(u => u());
       unsubs = [];
       msgEls = new Map();
+      const lb = document.querySelector(".img-lightbox");
+      if (lb) lb.remove();
     }
   };
 

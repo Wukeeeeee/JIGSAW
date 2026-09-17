@@ -203,7 +203,7 @@
       const userMsg = { id: uid("m"), role: "user", text, modelId, status: "done", createdAt: now() };
       conv.messages.push(userMsg);
       this.touch(convId);
-      const asstMsg = { id: uid("m"), role: "assistant", text: "排队中…", full: "", modelId, status: "queued", createdAt: now() };
+      const asstMsg = { id: uid("m"), role: "assistant", text: "", thinkingText: "排队中…", thinkingStatus: "running", full: "", modelId, status: "queued", createdAt: now() };
       conv.messages.push(asstMsg);
       Store.notify("messages");
       return { userMsg, asstMsg };
@@ -229,10 +229,12 @@
         asstMsg = placeholder.asstMsg;
         asstMsg.status = "streaming";
         asstMsg.text = "";
+        asstMsg.thinkingText = "思考中…";
+        asstMsg.thinkingStatus = "running";
       } else {
         userMsg = { id: uid("m"), role: "user", text, modelId, status: "done", createdAt: now() };
         conv.messages.push(userMsg);
-        asstMsg = { id: uid("m"), role: "assistant", text: "", full: "", modelId, status: "streaming", createdAt: now() };
+        asstMsg = { id: uid("m"), role: "assistant", text: "", thinkingText: "思考中…", thinkingStatus: "running", full: "", modelId, status: "streaming", createdAt: now() };
         conv.messages.push(asstMsg);
       }
       this.touch(convId);
@@ -263,6 +265,7 @@
         settled = true;
         if (stopTimers) stopTimers();
         asstMsg.status = "done";
+        asstMsg.thinkingStatus = "done";
         if (text !== undefined) asstMsg.text = asstMsg.full = text;
         Store.notify("messages");
         done(asstMsg);
@@ -286,13 +289,36 @@
       // ③ 拿到回复全文后，逐字显示（模拟打字效果，不是真流式）
       const stream = (full) => {
         asstMsg.full = full;
+        asstMsg.replyStarted = true;
+        asstMsg.thinkingStatus = "done";
         const speed = Store.get().settings.workflow.executionSpeed;
         const msPerChunk = speed === "slow" ? 34 : speed === "fast" ? 10 : 18;
         const chunk = speed === "slow" ? 2 : 4;
         let pos = 0;
         const timer = setInterval(() => {
           if (settled) { clearInterval(timer); return; }   // 已被终止 → 立刻停止打字
-          pos = Math.min(full.length, pos + chunk);
+
+          // ★ 针对 Markdown 图片 ![alt](url) 或 HTML <img ...> 标签：
+          // 如果遇到完整的图片语法，一次性步进输出完整标签，绝不拆分打字！
+          // 避免展示撕裂残破的 markdown 路径字符串，并避免高频销毁 <img> 造成剧烈上下抖动
+          if (full.slice(pos).startsWith("![")) {
+            const endParen = full.indexOf(")", pos);
+            if (endParen !== -1 && endParen - pos < 600) {
+              pos = endParen + 1;
+            } else {
+              pos = Math.min(full.length, pos + chunk);
+            }
+          } else if (full.slice(pos).startsWith("<img")) {
+            const endTag = full.indexOf(">", pos);
+            if (endTag !== -1 && endTag - pos < 600) {
+              pos = endTag + 1;
+            } else {
+              pos = Math.min(full.length, pos + chunk);
+            }
+          } else {
+            pos = Math.min(full.length, pos + chunk);
+          }
+
           asstMsg.text = full.slice(0, pos);
           Store.notify("messages");
           if (pos >= full.length) {
@@ -324,7 +350,12 @@
             const applyWait = () => {
               if (settled || asstMsg.status !== "streaming") return;
               const waitSec = Math.floor((Date.now() - rec.startedAt) / 1000);
-              asstMsg.text = statusText + (waitSec > 5 ? `（已等待 ${waitSec}s）` : "");
+              asstMsg.thinkingText = statusText + (waitSec > 3 ? `（已等待 ${waitSec}s）` : "");
+              asstMsg.thinkingDuration = waitSec;
+              // 若正式回答尚未开始流式输出，保持 text 为空（由 msg-thought 显示进度）
+              if (!asstMsg.replyStarted && !asstMsg.text) {
+                // 不向 asstMsg.text 乱填草稿
+              }
               Store.notify("messages");
             };
             const waitTimer = setInterval(applyWait, 1000);

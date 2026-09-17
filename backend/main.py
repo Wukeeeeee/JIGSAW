@@ -12,7 +12,7 @@ services/ 下的实现（chat_service / execution_service / workflow_service）�
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import agents, chat, execution, knowledge, models, settings, stats, tools, workflows
+from routers import agents, chat, execution, files, knowledge, models, settings, stats, tools, workflows
 
 app = FastAPI(title="JIGSAW Backend", version="0.1.0")
 
@@ -40,6 +40,7 @@ app.include_router(settings.router, prefix="/api", tags=["settings"])
 app.include_router(tools.router, prefix="/api", tags=["tools"])
 app.include_router(stats.router, prefix="/api", tags=["stats"])
 app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
+app.include_router(files.router, prefix="/api/files", tags=["files"])
 
 
 @app.get("/api/health")

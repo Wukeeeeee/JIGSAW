@@ -55,6 +55,161 @@
 .msg-bubble th, .msg-bubble td { border: 1px solid var(--line-2); padding: 6px var(--sp-3); text-align: left; }
 .msg-bubble th { background: var(--bg-surface); font-weight: 600; }
 
+/* Link in bubble */
+.msg-bubble a.msg-link {
+  color: var(--text-1);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  word-break: break-all;
+  transition: opacity var(--transition);
+}
+.msg-bubble a.msg-link:hover { opacity: 0.75; }
+
+/* Image in bubble */
+.msg-img-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  max-width: 100%;
+  min-width: 240px;
+  min-height: 160px;
+  margin: var(--sp-2) 0;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-1);
+  border-radius: 0;
+  vertical-align: top;
+  cursor: zoom-in;
+  transition: border-color var(--transition);
+  box-sizing: border-box;
+  contain: layout paint;
+}
+.msg-img-wrap:hover {
+  border-color: var(--line-strong);
+}
+.msg-img {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  min-height: 140px;
+  object-fit: contain;
+  border-radius: 0;
+  background: var(--bg-base);
+  content-visibility: auto;
+}
+.msg-img.img-error {
+  min-height: 48px;
+  min-width: 160px;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.msg-img-caption {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--line-1);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================
+   Image Lightbox (大图查看灯箱)
+   ============================================================ */
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.88);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  opacity: 0;
+  animation: lightboxFadeIn 0.18s ease forwards;
+}
+@keyframes lightboxFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.img-lightbox-topbar {
+  flex: none;
+  height: 44px;
+  padding: 0 var(--sp-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 10, 10, 0.8);
+}
+.img-lightbox-title {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  max-width: 60%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.img-lightbox-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.img-lightbox-btn {
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--line-2);
+  color: var(--text-1);
+  font-size: 12px;
+  border-radius: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all var(--transition);
+}
+.img-lightbox-btn:hover {
+  background: var(--bg-raised);
+  border-color: var(--line-strong);
+}
+.img-lightbox-btn.btn-close {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  padding: 4px;
+  width: 28px;
+  height: 28px;
+  justify-content: center;
+}
+.img-lightbox-btn.btn-close:hover {
+  color: var(--text-1);
+}
+.img-lightbox-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  overflow: hidden;
+  cursor: zoom-out;
+}
+.img-lightbox-img {
+  max-width: 92vw;
+  max-height: 84vh;
+  object-fit: contain;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  cursor: default;
+  transition: transform 0.2s ease;
+}
+
 /* caret while streaming */
 .caret { display: inline-block; width: 7px; height: 15px; background: var(--text-1); vertical-align: text-bottom; margin-left: 2px; animation: caretBlink .8s steps(1) infinite; }
 @keyframes caretBlink { 50% { opacity: 0; } }
@@ -144,3 +299,99 @@ html[data-theme="light"] .send-btn:hover { background: #333; color: #fff; }
 .msg-step-text .icon { display: inline-flex; color: var(--text-4); }
 .msg-step.run .msg-step-text { color: var(--text-2); }
 .msg-step.run .msg-step-text .icon { color: var(--text-2); }
+
+/* ============================================================
+   专属思考与步骤执行块（.msg-thought: 固定顶部，不位移）
+   ============================================================ */
+.msg-thought {
+  border: 1px solid var(--line-1);
+  background: var(--bg-surface);
+  border-radius: 0;
+  margin-bottom: var(--sp-2);
+  transition: border-color var(--transition);
+}
+.msg-thought.running {
+  border-color: var(--line-2);
+  background: var(--bg-raised);
+}
+.msg-thought-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-surface);
+}
+.msg-thought.running .msg-thought-header {
+  background: var(--bg-raised);
+}
+.msg-thought-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-thought-title {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.msg-thought.running .msg-thought-title {
+  color: var(--text-1);
+}
+.thought-spinner {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--text-2);
+  animation: caretBlink 1s steps(1) infinite;
+}
+.msg-thought-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.msg-thought-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-3);
+  padding: 1px 5px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-base);
+  transition: all var(--transition);
+}
+.msg-thought-toggle svg {
+  transition: transform 0.18s ease;
+}
+.msg-thought-header:hover .msg-thought-toggle {
+  color: var(--text-1);
+  border-color: var(--line-strong);
+}
+.msg-thought-body {
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--line-1);
+  background: var(--bg-base);
+  overflow: hidden;
+  transition: max-height 0.2s ease, opacity 0.18s ease;
+}
+.msg-thought-body.collapsed {
+  display: none;
+}
+
+/* 紧凑版工具标签（嵌入思考块头部） */
+.msg-tools.msg-tools-compact {
+  margin: 0;
+}
+.msg-tools.msg-tools-compact .msg-tool-tag {
+  padding: 1px 6px;
+  font-size: 10px;
+  background: var(--bg-base);
+}

@@ -200,10 +200,17 @@ def _tool_meta(name: str, t: dict, enabled: bool) -> dict:
 # ============================================================
 
 from . import (ask_user, fetch_url, shell, time, websearch, editfile, apply_patch,
-               calc, read_extra, knowledge_search, knowledge_info, knowledge_write)
+               calc, read_extra, knowledge_search, knowledge_info, knowledge_write, generate_image)
 
 
 TOOLS = {
+    "generate_image": {
+        "schema": generate_image.SCHEMA,
+        "run": generate_image.run,
+        "icon": "image",
+        "label": "AI 图像生成",
+        "desc": "调用生图模型（Agnes / FLUX / DALL-E 等），根据提示词直接创作图片并内嵌显示",
+    },
     "get_current_time": {
         "schema": time.SCHEMA,
         "run": time.run,

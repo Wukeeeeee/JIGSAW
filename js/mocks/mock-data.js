@@ -191,6 +191,24 @@
     general: { workspaceName: "JIGSAW", density: "comfortable" },
     appearance: { theme: "dark", fontSize: "medium", showTimestamps: true, showHomeTagline: false },
     model: { defaultModel: "jigsaw-ultra", visionEnabled: true, toolsEnabled: true, temperature: 0.7, custom: [] },
+    image: {
+      activeModelId: "im-agnes",
+      models: [
+        {
+          id: "im-agnes",
+          name: "Agnes AI (Flash)",
+          modelId: "agnes-image-2.5-flash",
+          baseUrl: "https://apihub.agnes-ai.com/v1",
+          apiKey: "sk-GBAHpuEiGQZN4fUUzSRMFouoB6iJ8zs1LWLkjMwYQuQENfDD",
+          aspectRatio: "1:1"
+        }
+      ],
+      provider: "agnes",
+      baseUrl: "https://apihub.agnes-ai.com/v1",
+      apiKey: "sk-GBAHpuEiGQZN4fUUzSRMFouoB6iJ8zs1LWLkjMwYQuQENfDD",
+      modelId: "agnes-image-2.5-flash",
+      aspectRatio: "1:1"
+    },
     api: { provider: "openai", baseUrl: "http://127.0.0.1:8000", connected: false, mode: "mock" },
     workflow: { defaultTemplate: "default", executionSpeed: "normal", autoRun: false, gridSize: 40 },
     about: { version: "0.1.0", build: "本地构建" }
