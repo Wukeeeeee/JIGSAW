@@ -346,6 +346,8 @@
                 } else {
                   // ★ 实时状态：排队中（第 N 位）/ 正在调用 XX 工具 / 思考中 / 等待用户回答
                   asstMsg.status = "streaming";
+                  // ★ 实时执行步骤轨迹：每次工具调用一条，chat 视图画成 SVG 时间线
+                  asstMsg.steps = t.steps || [];
                   // ★ AskUser / 风险确认：AI 想问你问题 → 弹窗
                   // 用"提问序号"判断是不是新问题：同一个问题只弹一次。
                   // （后端答完题会把 pendingQuestion 清掉，序号是双保险，

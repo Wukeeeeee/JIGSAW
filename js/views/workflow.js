@@ -1135,7 +1135,13 @@
 
   /* ---------- keyboard ---------- */
   function onKey(e) {
-    if (e.key === "Delete" || e.key === "Backspace") {
+    // 聚焦在任何输入框、文本域或可编辑区域时，绝对不拦截 Delete / Backspace 等按键
+    if (e.target && (e.target.closest("input, textarea, select, [contenteditable]") || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) {
+      return;
+    }
+
+    // 仅响应 Delete 键（移除容易引起误触的 Backspace 退格键）
+    if (e.key === "Delete") {
       const selEdge = Store.get().ui.selectedEdgeId;
       const sel = Store.get().ui.selectedNodeId;
       if (selEdge && wf()) {

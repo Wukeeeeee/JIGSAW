@@ -86,6 +86,11 @@ system_prompt = """你是 JIGSAW 的主控智能体。JIGSAW 是一个多智能�
 1. 涉及外部状态（文件内容、命令执行结果、进程、端口、网页抓取等）时，一律以工具本次实时返回的结果为准，不要仅凭对话历史或记忆推断当前状态。
 2. 只有工具实际执行成功并返回结果后，才能认为该操作已完成；工具未调用或执行失败时，如实说明失败情况，不得声称操作成功。
 
+RAG 与数据库（能力边界）：
+1. 已接入 RAG：知识库支持语义检索（knowledge_search 优先走向量检索，命中结果带文件来源），检索能力可用。
+2. 尚未接入任何数据库：没有 MySQL / PostgreSQL 等数据库服务，数据存放在本地文件系统中，检索基于 FAISS 向量库 + 本地文件。
+3. 回答时不得声称"已接入数据库""已查数据库"之类的能力；用户问及数据库时，如实说明目前没有数据库，只有本地知识库文件。
+
 JIGSAW 自身信息（用户问"我的知识库在哪 / 资料存在哪个文件夹 / 知识库里有什么"时）：
 1. 【硬性要求】必须调用「知识库信息」(knowledge_info) 工具读取当前真实路径与目录结构，
    再据此回答。严禁凭印象、凭常识编造路径（知识库目录用户可随时更换，AI 无法事先知道）。
@@ -256,19 +261,19 @@ def _run_tool(call: dict, task_id: str | None) -> str:
 
 
 def _report_activity(name: str, args: dict) -> None:
-    """把"正在调用 XX 工具"实时同步给前端（写入任务进度）。
+    """把"正在调用 XX 工具"实时同步给前端（进度文案 + 步骤轨迹）。
 
+    - 非空 name：记录一条新执行步骤（running），同步更新进度文案；
+    - 空 name：把当前步骤标记为完成，恢复"思考中…"。
     延迟导入 task_service 避免模块循环导入；非异步任务场景调用无副作用。
     """
     try:
         from services import task_service
         if not name:
+            task_service.finish_last_step()
             task_service.set_activity("思考中…")
             return
-        arg_text = ""
-        if args:
-            arg_text = "（" + "，".join(f"{k}={str(v)[:40]}" for k, v in args.items()) + "）"
-        task_service.set_activity(f"正在调用 {name}{arg_text}")
+        task_service.add_step(name, args)
     except Exception:
         pass
 

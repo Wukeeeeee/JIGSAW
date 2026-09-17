@@ -76,6 +76,7 @@ def create_task(conversation_id: str, message: str,
             "status": "pending",      # pending(排队) → running(处理中) → done / failed
             "queue_position": len(QUEUE) + 1,
             "activity": None,         # 实时进度文案，如 "正在调用 网页搜索（关岛签证）"
+            "steps": [],              # 实时执行步骤轨迹：[{name, args, status, at}]，前端画时间线
             "pendingQuestion": None,  # 待用户回答的问题（AskUser 工具用，非空时前端弹窗）
             "pendingRisk": False,     # 该弹窗是否是"风险确认"（是则显示不再提醒勾选框）
             "pendingOptions": [],     # 该问题的可点选答案（前端渲染成按钮，最多 4 项）
@@ -100,6 +101,8 @@ def get_task(task_id: str) -> dict | None:
         copy = dict(task)
         # QUEUE 里只放 pending：位置从 1 开始数（第 1 位 = 下一个就轮到）
         copy["queue_position"] = (QUEUE.index(task_id) + 1) if task_id in QUEUE else 0
+        # steps 深拷贝一份（含每条 dict），避免调用方误改内部状态
+        copy["steps"] = [dict(s) for s in (task.get("steps") or [])]
         return copy
 
 
@@ -115,6 +118,55 @@ def set_activity(text: str) -> None:
     with _lock:
         if tid in TASKS:
             TASKS[tid]["activity"] = text
+
+
+def _step_text(name: str, args: dict | None) -> str:
+    """步骤的实时文案（与 set_activity 的格式保持一致）。"""
+    arg_text = ""
+    if args:
+        arg_text = "（" + "，".join(f"{k}={str(v)[:40]}" for k, v in args.items()) + "）"
+    return f"正在调用 {name}{arg_text}"
+
+
+def add_step(name: str, args: dict | None = None) -> None:
+    """记录一条实时执行步骤（一次工具调用），供前端画步骤轨迹。
+
+    步骤从 running 开始，工具执行完由 finish_last_step() 标记为 done。
+    同一时刻最多一条 running：新步骤开始前，先把上一条未收尾的（如 AskUser
+    挂起、异常中断）标记完成，避免前端出现两条"正在进行"。
+    多 Worker：按调用者所在线程定位任务，各写各的。
+    """
+    tid = _thread_task.get(threading.get_ident())
+    if not tid:
+        return
+    with _lock:
+        if tid not in TASKS:
+            return
+        steps = TASKS[tid]["steps"]
+        if steps and steps[-1].get("status") == "running":
+            steps[-1]["status"] = "done"
+        steps.append({
+            "name": name,
+            "args": dict(args or {}),
+            "status": "running",
+            "at": _now_iso(),
+        })
+        TASKS[tid]["activity"] = _step_text(name, args)
+
+
+def finish_last_step() -> None:
+    """把当前任务最近一条 running 步骤标记为 done（工具执行完调用）。"""
+    tid = _thread_task.get(threading.get_ident())
+    if not tid:
+        return
+    with _lock:
+        if tid not in TASKS:
+            return
+        steps = TASKS[tid]["steps"]
+        for st in reversed(steps):
+            if st.get("status") == "running":
+                st["status"] = "done"
+                break
 
 
 def running_count() -> int:
@@ -197,6 +249,7 @@ def list_active_tasks() -> list:
                 "status": task["status"],
                 "queue_position": (QUEUE.index(tid) + 1) if tid in QUEUE else 0,
                 "activity": task.get("activity"),
+                "steps": list(task.get("steps") or []),
                 "pendingQuestion": task.get("pendingQuestion"),
                 "pendingRisk": bool(task.get("pendingRisk")),
                 "pendingOptions": task.get("pendingOptions") or [],

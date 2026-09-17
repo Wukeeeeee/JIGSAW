@@ -328,8 +328,7 @@
           ),
           h("div", { class: "about-links" },
             h("a", { class: "link", href: "https://github.com/Wukeeeeee/JIGSAW", target: "_blank", rel: "noopener" }, Icons.icon("link", 13), "文档"),
-            h("a", { class: "link", href: "https://github.com/Wukeeeeee/JIGSAW", target: "_blank", rel: "noopener" }, Icons.icon("code", 13), "源代码"),
-            h("a", { class: "link", href: "#/", "data-link": "1" }, Icons.icon("message", 13), "社区")
+            h("a", { class: "link", href: "https://github.com/Wukeeeeee/JIGSAW", target: "_blank", rel: "noopener" }, Icons.icon("code", 13), "源代码")
           )
         )
       ),
@@ -349,11 +348,7 @@
     RENDERERS[current](s).forEach(n => inner.appendChild(n));
     contentEl.appendChild(inner);
 
-    // 关于页链接 + 自定义模型删除
-    els('[data-link="1"]', contentEl).forEach(a => a.addEventListener("click", e => {
-      e.preventDefault();
-      JIGSAW.Toast.show("占位链接 —— 本地构建");
-    }));
+    // 自定义模型删除
     els('[data-del-cm]', contentEl).forEach(b => b.addEventListener("click", async () => {
       const m = (Store.get().settings.model.custom || []).find(x => x.id === b.dataset.delCm);
       const ok = await JIGSAW.PromptModal.confirm({

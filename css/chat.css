@@ -129,3 +129,18 @@ html[data-theme="light"] .send-btn:hover { background: #333; color: #fff; }
 .msg-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .msg-tool-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line-1); background: var(--bg-surface); font-size: 10px; color: var(--text-2); }
 .msg-tool-tag .icon { color: var(--text-3); }
+/* ============================================================
+   实时执行步骤轨迹（SVG 时间线：黑白灰 / 直角 / 1px 细线）
+   ============================================================ */
+.msg-steps { display: flex; flex-direction: column; margin: 6px 0 4px; }
+.msg-step { display: flex; align-items: flex-start; gap: 6px; height: 24px; }
+.msg-step svg { flex: none; display: block; }
+.msg-step-text {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 11px; line-height: 24px;
+  color: var(--text-3); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 460px;
+}
+.msg-step-text .icon { display: inline-flex; color: var(--text-4); }
+.msg-step.run .msg-step-text { color: var(--text-2); }
+.msg-step.run .msg-step-text .icon { color: var(--text-2); }

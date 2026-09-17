@@ -188,7 +188,7 @@
 
   /* ---------- 设置 ---------- */
   const SETTINGS = {
-    general: { workspaceName: "JIGSAW", language: "system", density: "comfortable" },
+    general: { workspaceName: "JIGSAW", density: "comfortable" },
     appearance: { theme: "dark", fontSize: "medium", showTimestamps: true, showHomeTagline: false },
     model: { defaultModel: "jigsaw-ultra", visionEnabled: true, toolsEnabled: true, temperature: 0.7, custom: [] },
     api: { provider: "openai", baseUrl: "http://127.0.0.1:8000", connected: false, mode: "mock" },

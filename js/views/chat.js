@@ -39,6 +39,49 @@
     );
   }
 
+  /** 工具参数摘要（截断，避免步骤行被超长参数撑爆） */
+  function argSummary(args) {
+    if (!args) return "";
+    const parts = Object.entries(args)
+      .filter(([, v]) => v !== null && v !== undefined && v !== "")
+      .map(([k, v]) => k + "=" + String(v).slice(0, 40));
+    const s = parts.join("，");
+    return s.length > 60 ? s.slice(0, 60) + "…" : s;
+  }
+
+  /** 实时执行步骤轨迹：SVG 竖线时间线（黑白灰 / 直角 / 1px 细线）。
+   *  每步一行：左侧 SVG（竖线 + 方块节点），右侧工具图标 + 中文名（参数摘要）。
+   *  done = 已完成（灰节点/灰字），run = 正在进行（空心高亮节点 + "正在 " 前缀）。 */
+  function buildStepsRow(steps) {
+    const wrap = h("div", { class: "msg-steps" });
+    (steps || []).forEach((st, i) => {
+      const first = i === 0;
+      const last = i === steps.length - 1;
+      const running = st.status !== "done";
+      const meta = JIGSAW.ToolService.getMeta(st.name) || {};
+      const label = meta.label || st.name;
+      const arg = argSummary(st.args);
+      const title = st.name + (arg ? "（" + arg + "）" : "");
+      const row = h("div", { class: "msg-step" + (running ? " run" : " done") },
+        h("svg", { width: "14", height: "24", viewBox: "0 0 14 24", "aria-hidden": "true" },
+          (first && last) ? null : h("line", {
+            x1: "7", y1: first ? "12" : "0", x2: "7", y2: last ? "12" : "24",
+            stroke: "var(--line-2)", "stroke-width": "1"
+          }),
+          running
+            ? h("rect", { x: "5", y: "10", width: "4", height: "4", fill: "var(--bg-surface)", stroke: "var(--text-2)", "stroke-width": "1" })
+            : h("rect", { x: "5", y: "10", width: "4", height: "4", fill: "var(--text-3)" })
+        ),
+        h("span", { class: "msg-step-text", title },
+          meta.icon ? h("span", { class: "icon" }, Icons.icon(meta.icon, 11)) : null,
+          h("span", null, (running ? "正在 " : "") + label + (arg ? "（" + arg + "）" : ""))
+        )
+      );
+      wrap.appendChild(row);
+    });
+    return wrap;
+  }
+
   function messageEl(msg, conv) {
     const isUser = msg.role === "user";
     // 用 byId：模型被删掉后不再"张冠李戴"显示成列表里第一个模型
@@ -53,6 +96,7 @@
         ),
         isUser || !(msg.toolsUsed && msg.toolsUsed.length) ? null : buildToolsRow(msg.toolsUsed),
         h("div", { class: "msg-bubble" }, msg.text ? Markdown.render(msg.text) : (msg.status === "streaming" ? "" : "")),
+        (isUser || msg.status !== "streaming" || !(msg.steps && msg.steps.length)) ? null : buildStepsRow(msg.steps),
         h("div", { class: "msg-actions" },
           h("button", { class: "icon-btn icon-btn-sm", "data-act": "copy", title: "复制" }, Icons.icon("copy", 13)),
           isUser ? null : h("button", { class: "icon-btn icon-btn-sm", "data-act": "regenerate", title: "重新生成" }, Icons.icon("refresh", 13)),
@@ -111,6 +155,13 @@
         let tagRow = el(".msg-tools", node);
         if (hasTools && !tagRow) { bubble.before(buildToolsRow(msg.toolsUsed)); }
         else if (!hasTools && tagRow) { tagRow.remove(); }
+        // 实时步骤轨迹：streaming 时跟随后端 steps 更新，结束后移除（折叠成工具标签）
+        const stepList = (msg.status === "streaming") ? (msg.steps || []) : null;
+        let stepRow = el(".msg-steps", node);
+        if (stepList && stepList.length) {
+          if (!stepRow) bubble.after(buildStepsRow(stepList));
+          else stepRow.replaceWith(buildStepsRow(stepList));
+        } else if (stepRow) { stepRow.remove(); }
         // model tag update
         const tag = el(".model-tag", node);
         if (tag) tag.textContent = (JIGSAW.ModelService.byId(msg.modelId) || {}).name || "";
