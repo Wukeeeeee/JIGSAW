@@ -47,6 +47,7 @@
 
     // 从后端拉回模型配置（持久化：清浏览器缓存也不丢模型）
     JIGSAW.ModelService.syncFromServer();
+    if (JIGSAW.ImageService) JIGSAW.ImageService.syncFromServer();
 
     // 从后端拉回会话列表（持久化：刷新页面后历史记录还在）
     JIGSAW.ChatService.loadRemote();
@@ -62,6 +63,7 @@
         await JIGSAW.ToolService.load();          // 拉工具列表（工具广场 / 气泡标签用）
         JIGSAW.ChatService.loadRemote();          // 拉会话历史
         JIGSAW.ModelService.syncFromServer();     // 拉模型配置
+        if (JIGSAW.ImageService) JIGSAW.ImageService.syncFromServer(); // 拉生图模型配置
       }
     } catch (e) {
       /* 后端没起来：保持当前模式（mock），不打扰用户，进设置可手动连 */

@@ -29,6 +29,10 @@ def get_raw_file(path: str = Query(..., description="本地图片文件的绝对
     elif raw_path.startswith("file://"):
         raw_path = raw_path[7:]
 
+    # 针对 Windows 盘符路径（如 /E:/... 或 /e:/...）去除前导斜杠
+    if len(raw_path) >= 3 and raw_path[0] in ("/", "\\") and raw_path[2] == ":":
+        raw_path = raw_path[1:]
+
     # 规范化路径
     real_path = os.path.normpath(os.path.abspath(raw_path))
 

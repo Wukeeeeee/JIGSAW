@@ -252,9 +252,11 @@
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .chat-input-actions-right { display: flex; align-items: center; gap: var(--sp-1); }
-/* 权限级别下拉（模型左边）：与模型/发送同高 */
-.chat-input-actions-right .perm-dd { flex: none; }
-.chat-input-actions-right .perm-dd .dd-btn { height: 34px; }
+/* 权限级别下拉与生图模型下拉：与模型/发送同高 */
+.chat-input-actions-right .perm-dd,
+.chat-input-actions-right .img-dd { flex: none; }
+.chat-input-actions-right .perm-dd .dd-btn,
+.chat-input-actions-right .img-dd .dd-btn { height: 34px; }
 .chat-input-bar .chat-tools {
   max-width: 760px; margin: var(--sp-2) auto 0;
   display: flex; align-items: center; gap: var(--sp-2);
@@ -284,114 +286,109 @@ html[data-theme="light"] .send-btn:hover { background: #333; color: #fff; }
 .msg-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .msg-tool-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line-1); background: var(--bg-surface); font-size: 10px; color: var(--text-2); }
 .msg-tool-tag .icon { color: var(--text-3); }
-/* ============================================================
-   实时执行步骤轨迹（SVG 时间线：黑白灰 / 直角 / 1px 细线）
-   ============================================================ */
-.msg-steps { display: flex; flex-direction: column; margin: 6px 0 4px; }
-.msg-step { display: flex; align-items: flex-start; gap: 6px; height: 24px; }
-.msg-step svg { flex: none; display: block; }
-.msg-step-text {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--font-mono); font-size: 11px; line-height: 24px;
-  color: var(--text-3); white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; max-width: 460px;
-}
-.msg-step-text .icon { display: inline-flex; color: var(--text-4); }
-.msg-step.run .msg-step-text { color: var(--text-2); }
-.msg-step.run .msg-step-text .icon { color: var(--text-2); }
 
-/* ============================================================
-   专属思考与步骤执行块（.msg-thought: 固定顶部，不位移）
-   ============================================================ */
+/* ---- 智能体协同执行与思考面板 ---- */
 .msg-thought {
-  border: 1px solid var(--line-1);
+  margin: var(--sp-2) 0;
+  padding: 10px 14px;
   background: var(--bg-surface);
-  border-radius: 0;
-  margin-bottom: var(--sp-2);
-  transition: border-color var(--transition);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  transition: all 0.2s ease;
 }
-.msg-thought.running {
-  border-color: var(--line-2);
+.msg-thought.is-running {
+  border-color: var(--line-strong);
   background: var(--bg-raised);
 }
 .msg-thought-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  gap: 8px;
+  font-size: 12px;
   color: var(--text-2);
   cursor: pointer;
   user-select: none;
-  background: var(--bg-surface);
-}
-.msg-thought.running .msg-thought-header {
-  background: var(--bg-raised);
 }
 .msg-thought-left {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  font-weight: 500;
+  min-width: 0;
+}
+.msg-thought-left .text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.msg-thought-title {
-  color: var(--text-2);
-  font-weight: 500;
-}
-.msg-thought.running .msg-thought-title {
+.msg-thought.is-running .msg-thought-spinner {
+  display: inline-flex;
+  animation: spin 1.4s linear infinite;
   color: var(--text-1);
 }
-.thought-spinner {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  background: var(--text-2);
-  animation: caretBlink 1s steps(1) infinite;
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 .msg-thought-right {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex: none;
 }
-.msg-thought-toggle {
+.msg-thought-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid var(--line-2);
+}
+.msg-thought-badge.badge-running {
+  background: rgba(234, 179, 8, 0.12);
+  color: #eab308;
+  border-color: rgba(234, 179, 8, 0.3);
+}
+.msg-thought-badge.badge-done {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.msg-thought-steps {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-1);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.msg-thought-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 3px 0;
+}
+.msg-thought-step-left {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  color: var(--text-3);
-  padding: 1px 5px;
-  border: 1px solid var(--line-2);
-  background: var(--bg-base);
-  transition: all var(--transition);
+  gap: 6px;
+  min-width: 0;
 }
-.msg-thought-toggle svg {
-  transition: transform 0.18s ease;
-}
-.msg-thought-header:hover .msg-thought-toggle {
+.msg-thought-step-name {
+  font-weight: 500;
   color: var(--text-1);
-  border-color: var(--line-strong);
 }
-.msg-thought-body {
-  padding: 6px 10px 8px;
-  border-top: 1px solid var(--line-1);
-  background: var(--bg-base);
-  overflow: hidden;
-  transition: max-height 0.2s ease, opacity 0.18s ease;
+.msg-thought-step-desc {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-left: 4px;
 }
-.msg-thought-body.collapsed {
-  display: none;
+.msg-thought-step-right {
+  flex: none;
+  font-size: 10px;
+  font-family: var(--font-mono);
 }
 
-/* 紧凑版工具标签（嵌入思考块头部） */
-.msg-tools.msg-tools-compact {
-  margin: 0;
-}
-.msg-tools.msg-tools-compact .msg-tool-tag {
-  padding: 1px 6px;
-  font-size: 10px;
-  background: var(--bg-base);
-}

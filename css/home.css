@@ -166,6 +166,8 @@
 /* 权限级别下拉（模型选择器左边）：与模型下拉同高 */
 .perm-dd { flex: none; }
 .perm-dd .dd-btn { height: 34px; }
+.img-dd { flex: none; }
+.img-dd .dd-btn { height: 34px; }
 .home-input-actions-right { display: flex; align-items: center; gap: 4px; }
 
 .home-examples { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: center; max-width: 760px; }

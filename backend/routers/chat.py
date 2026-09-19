@@ -106,6 +106,30 @@ def get_messages(conversation_id: str):
     return {"conversation_id": conversation_id, "messages": store.get_messages(conversation_id)}
 
 
+class UpdateMessagesIn(BaseModel):
+    messages: list[dict]
+
+
+@router.put("/conversations/{conversation_id}/messages")
+def update_messages(conversation_id: str, payload: UpdateMessagesIn):
+    conv = store.get_conversation(conversation_id)
+    if conv is None:
+        first_user_msg = next((m.get("text", "") for m in payload.messages if m.get("role") == "user"), "")
+        conv = {
+            "id": conversation_id,
+            "title": (first_user_msg[:48] or "多智能体工作流会话"),
+            "createdAt": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+            "messages": [],
+            "modelId": "deepseek-chat",
+            "workflowExecuted": True
+        }
+        store.conversations.append(conv)
+    conv["messages"] = payload.messages
+    conv["workflowExecuted"] = True
+    store.save_conversations()
+    return {"ok": True}
+
+
 @router.get("/conversations")
 def list_conversations():
     return {"conversations": store.list_conversations()}

@@ -68,7 +68,7 @@ system_prompt = """你是 JIGSAW 的主控智能体。JIGSAW 是一个多智能�
 - 简单请求：直接回答，不拆解。
 - 复杂任务：拆解为多个专业 Agent 分工协作（如 研究 Agent → 分析 Agent → 写作 Agent → 终审 Agent），按依赖顺序依次执行。每个 Agent 的执行状态（等待中 / 运行中 / 已完成 / 失败）实时显示在工作流页面，用户据此知道任务进行到哪一步。
 
--目前还没有接入多Agent协作，先按单智能体模式处理即可。你可以调用工具（Tool）来辅助完成任务，工具列表可在前端查看。
+- 你可以调用工具（Tool）来辅助完成任务（如检索、运行代码、知识库读写、生图等），工具列表可在前端查看。
 
 工作方式：
 1. 收到复杂任务时，先说明你的拆解计划：用哪几个 Agent、各自负责什么、先后顺序。
@@ -78,18 +78,13 @@ system_prompt = """你是 JIGSAW 的主控智能体。JIGSAW 是一个多智能�
 回答规范：
 1. 先给直接结论，再补必要细节；简洁、准确、不空话。
 2. 用结构化表达（分点、步骤）组织内容，避免堆砌。
-3. 不确定或缺乏依据的信息要明确说明，不编造。
+3. 不确定或缺乏依据的信息要明确说明，不编造。严禁无中生有编造商业口号（Slogan）或空洞套话。
 4. 始终使用与用户相同的语言。
 5. 不要提及或解释"是否拆解了任务""是否简单查询"这类内部流程，直接给出答案即可。
 
 工具与信息验证：
 1. 涉及外部状态（文件内容、命令执行结果、进程、端口、网页抓取等）时，一律以工具本次实时返回的结果为准，不要仅凭对话历史或记忆推断当前状态。
 2. 只有工具实际执行成功并返回结果后，才能认为该操作已完成；工具未调用或执行失败时，如实说明失败情况，不得声称操作成功。
-
-RAG 与数据库（能力边界）：
-1. 已接入 RAG：知识库支持语义检索（knowledge_search 优先走向量检索，命中结果带文件来源），检索能力可用。
-2. 尚未接入任何数据库：没有 MySQL / PostgreSQL 等数据库服务，数据存放在本地文件系统中，检索基于 FAISS 向量库 + 本地文件。
-3. 回答时不得声称"已接入数据库""已查数据库"之类的能力；用户问及数据库时，如实说明目前没有数据库，只有本地知识库文件。
 
 JIGSAW 自身信息（用户问"我的知识库在哪 / 资料存在哪个文件夹 / 知识库里有什么"时）：
 1. 【硬性要求】必须调用「知识库信息」(knowledge_info) 工具读取当前真实路径与目录结构，
@@ -152,7 +147,7 @@ JIGSAW 自身信息（用户问"我的知识库在哪 / 资料存在哪个文件
 
 
 def _build_system_prompt() -> str:
-    """动态组装包含当前已配置生图模型列表与确认规则的 System Prompt"""
+    """动态组装包含当前已配置生图模型列表与规则的 System Prompt"""
     try:
         from tools.generate_image import get_available_image_models
         img_models = get_available_image_models()
@@ -160,36 +155,35 @@ def _build_system_prompt() -> str:
         img_models = []
 
     model_rules = ""
-    if len(img_models) > 1:
+    if img_models:
+        default_model = next((m for m in img_models if m.get("isDefault")), img_models[0])
         model_list_str = "\n".join([
-            f"- {m['name']} (模型 ID: `{m['modelId']}`)" + ("【当前默认】" if m.get("isDefault") else "")
+            f"- {m['name']} (模型 ID: `{m['modelId']}`)" + ("【当前界面已选激活】" if m.get("isDefault") else "")
             for m in img_models
         ])
-        options_demo = [m['name'] + ("（推荐）" if m.get('isDefault') else "") for m in img_models[:4]]
         model_rules = f"""
 
-【生图前向用户确认模型的硬性规则】：
-当前系统共配置了 {len(img_models)} 个可用生图模型：
+【AI 图像生成规则】：
+系统当前已配置生图模型列表：
 {model_list_str}
+当前用户在界面上已选定激活的生图模型为：【{default_model['name']}】(ID: `{default_model['modelId']}`)。
 
-1. 当用户提出绘图需求（如画画、生成海报、创作插画等）时：
-   - 【如果用户未在本次消息中明确指定使用哪款模型】：
-     在真正调用 generate_image 之前，【必须先调用 AskUser 工具】向用户提问，让用户确认想用哪个模型！
-     - question: "你想使用哪个生图模型进行本次创作？"
-     - options: {options_demo}
-     必须等待用户在前端交互弹窗中点选回答后，你再调用 generate_image，并把用户选中的模型作为 model 参数传入！
-   - 【如果用户已在指令中明确指定了模型】（例如"用 FLUX 画..."、"用 DALL-E 绘制..."、"用 Agnes 生成..."）：
-     直接识别用户的模型意图，调用 generate_image(prompt=..., model=...)，无需再次提问。
-2. 每次完成绘图后，输出 Markdown 贴图语法：![画面描述](本地路径)。
+1. 当用户提出绘图需求（如画画、生成配图、创作插画、概念图等）时：
+   - 积极引导并执行绘图创作！从画面主体、环境背景、构图视角、光影、色彩与艺术风格出发构建画面意境；
+   - 【严防幻化与套话】：严禁自作主张编造未经证实的商业宣传口号（Slogan）、大标题排版或空洞广告语，纯粹聚焦于画面美学与视觉表现力；
+   - 用户已在界面输入栏选定了生图模型【{default_model['name']}】，直接调用 generate_image 工具，将 model 参数设为 `{default_model['modelId']}`（或用户消息中明确指定的其他模型）执行真实绘图！
+   - 无需多余询问，立即调用 generate_image(prompt=..., model=...) 执行绘图！
+2. 每次完成绘图后，在回复中原样输出生成的 Markdown 贴图语法：![画面描述](本地图片路径)。
 """
-    elif len(img_models) == 1:
-        m = img_models[0]
-        model_rules = f"""
+    now = datetime.now().astimezone()
+    time_rules = f"""
 
-当前系统已配置单一生图模型：{m['name']} (ID: `{m['modelId']}`)。
-用户提出绘图需求时，直接调用 generate_image 生成即可，无需多余询问。
+【当前系统基准时间与时效要求】：
+当前真实系统时间：{now.strftime('%Y-%m-%d %H:%M:%S')}（{now.strftime('%A')}，本地时区）
+基准年份：{now.year} 年。
+进行任何市场数据检索、事实核验、财务测算、新闻时事及时间线推演时，必须严格以当前真实时间为基准，杜绝使用陈旧过时的时间假定！
 """
-    return system_prompt + model_rules
+    return system_prompt + model_rules + time_rules
 
 
 
@@ -319,19 +313,19 @@ def _run_tool(call: dict, task_id: str | None) -> str:
 
 
 def _report_activity(name: str, args: dict) -> None:
-    """把"正在调用 XX 工具"实时同步给前端（进度文案 + 步骤轨迹）。
+    """把"正在调用 XX 工具"实时同步给前端（写入任务进度）。
 
-    - 非空 name：记录一条新执行步骤（running），同步更新进度文案；
-    - 空 name：把当前步骤标记为完成，恢复"思考中…"。
     延迟导入 task_service 避免模块循环导入；非异步任务场景调用无副作用。
     """
     try:
         from services import task_service
         if not name:
-            task_service.finish_last_step()
             task_service.set_activity("思考中…")
             return
-        task_service.add_step(name, args)
+        arg_text = ""
+        if args:
+            arg_text = "（" + "，".join(f"{k}={str(v)[:40]}" for k, v in args.items()) + "）"
+        task_service.set_activity(f"正在调用 {name}{arg_text}")
     except Exception:
         pass
 

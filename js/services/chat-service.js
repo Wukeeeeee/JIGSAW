@@ -47,12 +47,13 @@
       }
     },
 
-    create({ title, text, modelId }) {
+    create({ title, text, modelId, imageModelId }) {
       const convId = uid("c");
       const template = detectTemplate(text);
       const conv = {
         id: convId, title: title || text.slice(0, 48) || "New chat",
         modelId: modelId || Store.get().activeModelId,
+        imageModelId: imageModelId || (JIGSAW.ImageService && JIGSAW.ImageService.getActive() ? JIGSAW.ImageService.getActive().id : ""),
         createdAt: now(), messages: [],
         workflowTemplate: template, workflowExecuted: false
       };
@@ -269,6 +270,17 @@
         if (text !== undefined) asstMsg.text = asstMsg.full = text;
         Store.notify("messages");
         done(asstMsg);
+
+        // 同步持久化至后端
+        if (JIGSAW.Http && JIGSAW.Http.isRemote()) {
+          const curConv = ChatService.get(convId);
+          if (curConv && curConv.messages) {
+            JIGSAW.Http.request("/api/chat/conversations/" + encodeURIComponent(convId) + "/messages", {
+              method: "PUT",
+              body: { messages: curConv.messages }
+            }).catch(() => {});
+          }
+        }
       };
 
       /**
@@ -303,14 +315,14 @@
           // 避免展示撕裂残破的 markdown 路径字符串，并避免高频销毁 <img> 造成剧烈上下抖动
           if (full.slice(pos).startsWith("![")) {
             const endParen = full.indexOf(")", pos);
-            if (endParen !== -1 && endParen - pos < 600) {
+            if (endParen !== -1 && endParen - pos < 3000) {
               pos = endParen + 1;
             } else {
               pos = Math.min(full.length, pos + chunk);
             }
           } else if (full.slice(pos).startsWith("<img")) {
             const endTag = full.indexOf(">", pos);
-            if (endTag !== -1 && endTag - pos < 600) {
+            if (endTag !== -1 && endTag - pos < 3000) {
               pos = endTag + 1;
             } else {
               pos = Math.min(full.length, pos + chunk);
@@ -329,8 +341,17 @@
       };
 
       // ② 决定回复从哪来
-      if (JIGSAW.Http.isRemote()) {
-        // ===== 数据源 = 后端 API（异步任务） =====
+      const wf = JIGSAW.WorkflowService && JIGSAW.WorkflowService.getForConversation(convId);
+      const hasTopology = wf && wf.nodes && wf.nodes.length > 1;
+      const isWorkflowPrompt = wf && (
+        hasTopology ||
+        (conv && conv.workflowTemplate) ||
+        !wf.nodes || wf.nodes.length <= 1 ||
+        /调研|对比|规划|工作流|智能体|agent|workflow|编排|拓扑|运行|执行|开始|启动|生成|制作|画图|绘图|出图|生图|报告|研报/i.test(text)
+      );
+
+      if (JIGSAW.Http.isRemote() && !isWorkflowPrompt) {
+        // ===== 数据源 = 后端 API（单 Agent 异步问答） =====
         // Http.chat() 只把消息寄给后端并拿到 task_id（毫秒级返回）
         // 然后每 2 秒轮询任务状态，实时显示：排队中 → 正在调用 XX 工具 → 完成
         JIGSAW.Http.chat(convId, text, model)
@@ -377,8 +398,6 @@
                 } else {
                   // ★ 实时状态：排队中（第 N 位）/ 正在调用 XX 工具 / 思考中 / 等待用户回答
                   asstMsg.status = "streaming";
-                  // ★ 实时执行步骤轨迹：每次工具调用一条，chat 视图画成 SVG 时间线
-                  asstMsg.steps = t.steps || [];
                   // ★ AskUser / 风险确认：AI 想问你问题 → 弹窗
                   // 用"提问序号"判断是不是新问题：同一个问题只弹一次。
                   // （后端答完题会把 pendingQuestion 清掉，序号是双保险，
@@ -428,9 +447,33 @@
             settle("请求后端失败：" + err.message + "（可在设置 → API 中检查接口地址或数据源）");
           });
       } else {
-        // ===== 数据源 = 本地 Mock =====
-        // 不联网，前端直接从预置回复里挑一段
-        stream(pickCanned(text));
+        // ===== 数据源 = 本地工作流 / 多 Agent 驱动 =====
+        const wf = JIGSAW.WorkflowService && JIGSAW.WorkflowService.getForConversation(convId);
+        if (wf && JIGSAW.ExecutionService) {
+          (async () => {
+            // 如果当前工作流只有起点/空画布，或用户明确提出重新编排/重新规划：由 Captain Agent 自主规划拓扑并绘制！
+            const needAutoPlan = !wf.nodes || wf.nodes.length <= 1 || /重新编排|重新规划|重新建图|自主规划|规划拓扑/i.test(text);
+            if (needAutoPlan) {
+              asstMsg.thinkingText = "Captain Agent 正在分析任务意图，自主规划并绘制多 Agent 拓扑…";
+              Store.notify("messages");
+              await JIGSAW.WorkflowService.autoPlanWorkflow(wf.id, text);
+            }
+
+            // 1. 将用户的输入文本作为初始任务 Prompt 注入 START 起点节点
+            const startNode = wf.nodes.find(n => n.agentType === "start") || wf.nodes[0];
+            if (startNode) {
+              startNode.output = text;
+            }
+
+            // 2. 调度多 Agent 工作流，由 ExecutionService 并发执行并将成果回传至对话
+            await JIGSAW.ExecutionService.start(convId);
+            settle();
+          })().catch(err => {
+            settle("多 Agent 调度异常：" + (err.message || err));
+          });
+        } else {
+          stream(pickCanned(text));
+        }
       }
 
       return asstMsg;

@@ -36,6 +36,46 @@
 
   const wf = () => WF.getForConversation(convId);
 
+  function getChatModels() {
+    const list = (JIGSAW.ModelService && JIGSAW.ModelService.list()) || [];
+    return list.filter(m => {
+      const mid = (m.model || m.modelId || m.name || "").toLowerCase();
+      const url = (m.baseUrl || "").toLowerCase();
+      return !mid.includes("image") && !mid.includes("flux") && !mid.includes("dall-e") && !url.includes("agnes-ai");
+    });
+  }
+
+  function getActiveChatModelId() {
+    const c = JIGSAW.ChatService && JIGSAW.ChatService.get(convId);
+    if (c && c.captainModelId) return c.captainModelId;
+    const w = wf();
+    if (w && w.captainModelId) return w.captainModelId;
+    const chats = getChatModels();
+    const active = JIGSAW.ModelService && JIGSAW.ModelService.getActive();
+    if (active && chats.some(ch => ch.id === active.id)) return active.id;
+    return chats[0] ? chats[0].id : (active ? active.id : "");
+  }
+
+  function getChatModels() {
+    const list = (JIGSAW.ModelService && JIGSAW.ModelService.list()) || [];
+    return list.filter(m => {
+      const mid = (m.model || m.modelId || m.name || "").toLowerCase();
+      const url = (m.baseUrl || "").toLowerCase();
+      return !mid.includes("image") && !mid.includes("flux") && !mid.includes("dall-e") && !url.includes("agnes-ai");
+    });
+  }
+
+  function getActiveChatModelId() {
+    const c = JIGSAW.ChatService && JIGSAW.ChatService.get(convId);
+    if (c && c.captainModelId) return c.captainModelId;
+    const w = wf();
+    if (w && w.captainModelId) return w.captainModelId;
+    const chats = getChatModels();
+    const active = JIGSAW.ModelService && JIGSAW.ModelService.getActive();
+    if (active && chats.some(ch => ch.id === active.id)) return active.id;
+    return chats[0] ? chats[0].id : (active ? active.id : "");
+  }
+
   /* ---------- transform ---------- */
   function updateTransform() {
     if (!world) return;
@@ -87,6 +127,23 @@
     };
   }
 
+  /** 获取指定节点特定端口的精确画布坐标 */
+  function portPos(id, portId = "out") {
+    const a = nodePos(id);
+    if (!a) return null;
+    const n = wf().nodes.find(x => x.id === id);
+    if (portId === "in") {
+      return { x: a.left, y: Math.round(a.top + a.h / 2) };
+    }
+    const outPorts = WF.getNodeOutputPorts(n);
+    if (outPorts.length > 1) {
+      const idx = outPorts.findIndex(p => p.id === portId);
+      const factor = (idx === 0) ? 0.32 : 0.68;
+      return { x: a.right, y: Math.round(a.top + a.h * factor) };
+    }
+    return { x: a.right, y: Math.round(a.top + a.h / 2) };
+  }
+
   /**
    * 将一系列正交折线点转换成在 90° 拐角处带有轻微圆角的 SVG path
    * 所有线段绝对保持纯水平或纯垂直（笔直），只有转折处产生微小圆角
@@ -131,13 +188,17 @@
 
   /**
    * 智能避障正交布线算法：计算从节点 a 到节点 b 的曼哈顿折线点序列
-   * 核心准则：不穿透卡片本身，必要时走外围安全通道（Bypass Corridor）
+   * 核心准则：支持从多端口精准引出与接入，不穿透卡片本身，必要时走外围安全通道（Bypass Corridor）
    */
-  function getOrthogonalPoints(a, b, isLoop = false) {
-    const x1 = a.right;
-    const y1 = a.top + (a.h || PORT_Y_OFF * 2) / 2;
-    const x2 = b.left;
-    const y2 = b.top + (b.h || PORT_Y_OFF * 2) / 2;
+  function getOrthogonalPoints(a, b, isLoop = false, fromPort = "out", toPort = "in", fromId = null, toId = null) {
+    let p1 = null, p2 = null;
+    if (fromId) p1 = portPos(fromId, fromPort);
+    if (toId) p2 = portPos(toId, toPort);
+
+    const x1 = p1 ? p1.x : a.right;
+    const y1 = p1 ? p1.y : Math.round(a.top + (a.h || PORT_Y_OFF * 2) / 2);
+    const x2 = p2 ? p2.x : b.left;
+    const y2 = p2 ? p2.y : Math.round(b.top + (b.h || PORT_Y_OFF * 2) / 2);
 
     // 1. 水平基本共线且向前无遮挡：一条干净的纯水平线
     if (Math.abs(y1 - y2) <= 1 && x2 >= x1 + 16 && !isLoop) {
@@ -162,21 +223,17 @@
     const pInX = x2 - stubIn;
 
     // 计算两卡片之间的垂直净空
-    const gapBelowA = b.top - a.bottom; // b 在 a 下方时的垂直净空间隙
-    const gapAboveA = a.top - b.bottom; // b 在 a 上方时的垂直净空间隙
+    const gapBelowA = b.top - a.bottom;
+    const gapAboveA = a.top - b.bottom;
 
     let corridorY;
     if (gapBelowA >= 36 && b.left <= x1 + 40) {
-      // b 在 a 下方且有空档：穿行于 a 底部和 b 顶部之间的中线
       corridorY = Math.round((a.bottom + b.top) / 2);
     } else if (gapAboveA >= 36 && b.left <= x1 + 40) {
-      // b 在 a 上方且有空档：穿行于 b 底部和 a 顶部之间的中线
       corridorY = Math.round((b.bottom + a.top) / 2);
     } else {
-      // 垂直高度有交叠或靠得太近：走彻底避开两节点的外部上下走廊（保留 28px 外围安全边距）
       const topBypass = Math.min(a.top, b.top) - 28;
       const botBypass = Math.max(a.bottom, b.bottom) + 28;
-      // 如果目标在上方，走顶部走廊；目标在下方，走底部走廊
       corridorY = (y2 < y1) ? topBypass : botBypass;
     }
 
@@ -190,45 +247,71 @@
     ];
   }
 
-  /** 拖拽连线时的临时正交线生成（智能避开源节点卡片） */
-  function getTempOrthogonalPoints(fromBox, wx, wy) {
-    const x1 = fromBox ? fromBox.right : 0;
-    const y1 = fromBox ? (fromBox.top + (fromBox.h || PORT_Y_OFF * 2) / 2) : 0;
-    if (wx >= x1 + 32) {
-      const midX = Math.round((x1 + wx) / 2);
+  /** 拖拽连线时的临时正交线生成（智能避开源节点卡片，支持正向与反向双向拖拽） */
+  function getTempOrthogonalPoints(fromBox, wx, wy, startPt = null, isReverse = false) {
+    const x1 = startPt ? startPt.x : (fromBox ? fromBox.right : 0);
+    const y1 = startPt ? startPt.y : (fromBox ? (fromBox.top + (fromBox.h || PORT_Y_OFF * 2) / 2) : 0);
+
+    if (!isReverse) {
+      if (wx >= x1 + 32) {
+        const midX = Math.round((x1 + wx) / 2);
+        return [
+          { x: x1, y: y1 },
+          { x: midX, y: y1 },
+          { x: midX, y: wy },
+          { x: wx, y: wy }
+        ];
+      }
+      const pOutX = x1 + 24;
+      const pInX = wx - 20;
+      const routeY = fromBox
+        ? ((wy >= y1) ? Math.max(fromBox.bottom + 28, wy + 20) : Math.min(fromBox.top - 28, wy - 20))
+        : (wy >= y1 ? wy + 40 : wy - 40);
       return [
         { x: x1, y: y1 },
-        { x: midX, y: y1 },
-        { x: midX, y: wy },
+        { x: pOutX, y: y1 },
+        { x: pOutX, y: routeY },
+        { x: pInX, y: routeY },
+        { x: pInX, y: wy },
+        { x: wx, y: wy }
+      ];
+    } else {
+      if (wx <= x1 - 32) {
+        const midX = Math.round((x1 + wx) / 2);
+        return [
+          { x: x1, y: y1 },
+          { x: midX, y: y1 },
+          { x: midX, y: wy },
+          { x: wx, y: wy }
+        ];
+      }
+      const pOutX = x1 - 24;
+      const pInX = wx + 20;
+      const routeY = fromBox
+        ? ((wy >= y1) ? Math.max(fromBox.bottom + 28, wy + 20) : Math.min(fromBox.top - 28, wy - 20))
+        : (wy >= y1 ? wy + 40 : wy - 40);
+      return [
+        { x: x1, y: y1 },
+        { x: pOutX, y: y1 },
+        { x: pOutX, y: routeY },
+        { x: pInX, y: routeY },
+        { x: pInX, y: wy },
         { x: wx, y: wy }
       ];
     }
-    const pOutX = x1 + 24;
-    const pInX = wx - 20;
-    const routeY = fromBox
-      ? ((wy >= y1) ? Math.max(fromBox.bottom + 28, wy + 20) : Math.min(fromBox.top - 28, wy - 20))
-      : (wy >= y1 ? wy + 40 : wy - 40);
-    return [
-      { x: x1, y: y1 },
-      { x: pOutX, y: y1 },
-      { x: pOutX, routeY },
-      { x: pInX, routeY },
-      { x: pInX, y: wy },
-      { x: wx, y: wy }
-    ];
   }
 
-  function edgePath(from, to, isLoop = false) {
+  function edgePath(from, to, isLoop = false, fromPort = "out", toPort = "in") {
     const a = nodePos(from), b = nodePos(to);
     if (!a || !b) return "";
-    const pts = getOrthogonalPoints(a, b, isLoop);
+    const pts = getOrthogonalPoints(a, b, isLoop, fromPort, toPort, from, to);
     return roundedOrthogonalPath(pts, CORNER_RADIUS);
   }
 
-  function getEdgeMidPoint(from, to, isLoop = false) {
+  function getEdgeMidPoint(from, to, isLoop = false, fromPort = "out", toPort = "in") {
     const a = nodePos(from), b = nodePos(to);
     if (!a || !b) return null;
-    const pts = getOrthogonalPoints(a, b, isLoop);
+    const pts = getOrthogonalPoints(a, b, isLoop, fromPort, toPort, from, to);
     if (!pts || pts.length < 2) return null;
     if (pts.length === 2) {
       return { x: Math.round((pts[0].x + pts[1].x) / 2), y: Math.round((pts[0].y + pts[1].y) / 2) };
@@ -245,8 +328,9 @@
     const w = wf();
     if (!world || !w) return;
 
-    // 清理旧的连线删除按钮
+    // 清理旧的连线删除按钮与标签
     els(".wf-edge-del-wrap", world).forEach(b => b.remove());
+    els(".wf-edge-label-wrap", world).forEach(b => b.remove());
 
     const selEdgeId = Store.get().ui.selectedEdgeId;
 
@@ -260,11 +344,17 @@
       const cls = ["wf-edge"];
       if (isSelected) cls.push("selected");
       if (e.isLoop) cls.push("is-loop");
-      if (fromNode && fromNode.status === "success") cls.push("from-success");
-      if (fromNode && fromNode.status === "skipped") cls.push("from-skipped");
-      if (toNode && toNode.status === "running") cls.push("to-running");
+      if (e.fromPort === "true") cls.push("branch-true");
+      if (e.fromPort === "false") cls.push("branch-false");
+      if (e.fromPort === "loop") cls.push("branch-loop");
+      if (e.fromPort === "catch") cls.push("branch-catch");
+      if (e.status === "success" || (fromNode && fromNode.status === "success" && e.status !== "skipped")) cls.push("from-success");
+      if (e.status === "skipped" || (fromNode && fromNode.status === "skipped")) cls.push("from-skipped");
+      if (e.activeFlow || (toNode && toNode.status === "running" && e.status !== "skipped")) {
+        cls.push("to-running", "active-flow");
+      }
 
-      const pathD = edgePath(e.from, e.to, !!e.isLoop);
+      const pathD = edgePath(e.from, e.to, !!e.isLoop, e.fromPort || "out", "in");
       edgesGroup.appendChild(svg("path", {
         class: cls.join(" "),
         d: pathD,
@@ -287,9 +377,24 @@
       });
       edgesGroup.appendChild(hitBox);
 
+      // 分支/条件标签显示
+      const labelText = e.label || (e.fromPort === "true" ? "True" : e.fromPort === "false" ? "False" : e.fromPort === "loop" ? "Loop" : e.fromPort === "catch" ? "Catch" : "");
+      if (labelText) {
+        const mid = getEdgeMidPoint(e.from, e.to, !!e.isLoop, e.fromPort || "out", e.toPort || "in");
+        if (mid) {
+          const lblWrap = h("div", {
+            class: "wf-edge-label-wrap",
+            style: { left: mid.x + "px", top: mid.y + "px" }
+          },
+            h("span", { class: "wf-edge-label label-" + (e.fromPort || "default") }, labelText)
+          );
+          world.appendChild(lblWrap);
+        }
+      }
+
       // 如果当前连线被选中，在其正交中点渲染删除按钮 [×]
       if (isSelected && !w.running) {
-        const mid = getEdgeMidPoint(e.from, e.to, !!e.isLoop);
+        const mid = getEdgeMidPoint(e.from, e.to, !!e.isLoop, e.fromPort || "out", e.toPort || "in");
         if (mid) {
           const delWrap = h("div", {
             class: "wf-edge-del-wrap",
@@ -298,7 +403,7 @@
             h("button", {
               type: "button",
               class: "wf-edge-del-btn",
-              title: "删除连线（或按 Delete / Backspace）",
+              title: "删除连线（或按 Delete 键）",
               "data-eid": e.id
             }, Icons.icon("x", 11))
           );
@@ -350,12 +455,21 @@
     existing.forEach((nodeEl, id) => {
       if (!seen.has(id)) { nodeEl.remove(); heights.delete(id); }
     });
+
+    // 清理旧残留引导卡片（若有）
+    const oldGuide = el(".wf-empty-guide", world);
+    if (oldGuide) oldGuide.remove();
   }
 
   function modelLabel(node) {
     const list = JIGSAW.ModelService.list();
     const m = list.find(x => x.id === node.modelId);
-    return m ? m.name : (list.length ? "未选择模型" : "未配置模型");
+    let lbl = m ? m.name : (list.length ? "未选择模型" : "未配置模型");
+    if (node.tools && node.tools.includes("generate_image")) {
+      const imgM = JIGSAW.ImageService ? JIGSAW.ImageService.get(node.imageModelId) : null;
+      if (imgM) lbl += " · 绘图: " + imgM.name;
+    }
+    return lbl;
   }
 
   /* ---------- 工具：一律用后端真实注册的工具，不再写死假名字 ---------- */
@@ -426,12 +540,27 @@
     const selected = Store.get().ui.selectedNodeId === node.id;
     const isLogic = isLogicNode(node);
     const tolEl = toleranceBadge(node);
+
+    // 输出端口组（支持多端口分支）
+    const outPorts = WF.getNodeOutputPorts(node);
+    const outPortEls = outPorts.map((p, idx) => {
+      const isMulti = outPorts.length > 1;
+      const posCls = isMulti ? (idx === 0 ? " port-multi-top" : " port-multi-bot") : "";
+      return h("div", {
+        class: "port out" + posCls + " port-" + p.id,
+        "data-port": p.id,
+        title: p.title || p.name
+      },
+        p.label ? h("span", { class: "port-badge" }, p.label) : null
+      );
+    });
+
     const nodeEl = h("div", {
       class: "wf-node" + (isStart ? " node-start" : "") + (isLogic ? " node-logic" : "") + (editable ? " editable" : " locked") + (selected ? " selected" : "") + statusClass(node.status),
       "data-id": node.id,
       style: { left: node.x + "px", top: node.y + "px", width: NODE_W + "px" }
     },
-      isStart ? null : h("div", { class: "port in", "data-port": "in" }),
+      isStart ? null : h("div", { class: "port in", "data-port": "in", title: "输入端口 (可点击或拖拽连线)" }),
       h("div", { class: "wf-node-head" },
         h("div", { class: "wf-node-icon" }, Icons.icon(node.icon || "dot", 12)),
         h("div", { class: "wf-node-drag" }, h("span", { class: "wf-node-name" }, node.name)),
@@ -449,7 +578,7 @@
         isStart ? null : h("button", { class: "icon-btn", "data-del": "1", title: editable ? "删除节点" : "已锁定" },
           Icons.icon("trash", 13))
       ),
-      h("div", { class: "port out", "data-port": "out" })
+      ...outPortEls
     );
     wireNode(nodeEl, node, w);
     return nodeEl;
@@ -491,8 +620,85 @@
     if (del) del.title = editable ? "删除节点" : "已锁定";
   }
 
+  let clickConnectSource = null;
+
+  function clearClickConnect() {
+    if (clickConnectSource) {
+      if (clickConnectSource.portEl) clickConnectSource.portEl.classList.remove("active-connect-source");
+      clickConnectSource = null;
+    }
+    if (canvas) canvas.classList.remove("connecting");
+    els(".port.snap-active", world).forEach(p => p.classList.remove("snap-active"));
+  }
+
+  function handlePortStart(e, node, portId, isReverse, portEl) {
+    if (e.button !== 0) return;
+    const w = wf();
+    if (!WF.isEditable(w, node.id)) {
+      JIGSAW.Toast.show("节点已锁定，重置后即可连线");
+      return;
+    }
+    e.stopPropagation();
+    e.preventDefault();
+
+    // 如果之前已点击选中某个端口，此次点击视作完成配对
+    if (clickConnectSource) {
+      const src = clickConnectSource;
+      if (src.nodeId === node.id && src.portId === portId) {
+        clearClickConnect();
+        JIGSAW.Toast.show("已取消连线");
+        return;
+      }
+      if (src.isReverse !== isReverse) {
+        const fromId = src.isReverse ? node.id : src.nodeId;
+        const fromPort = src.isReverse ? portId : src.portId;
+        const toId = src.isReverse ? src.nodeId : node.id;
+        const toPort = src.isReverse ? src.portId : portId;
+
+        clearClickConnect();
+        if (WF.addEdge(w.id, fromId, toId, fromPort, toPort)) {
+          JIGSAW.Toast.show("已添加连线");
+          renderWorkflow();
+        } else {
+          JIGSAW.Toast.show("无法连线或连线已存在");
+        }
+        return;
+      } else {
+        clearClickConnect();
+      }
+    }
+
+    const pPos = portPos(node.id, portId);
+    const x1 = pPos ? pPos.x : (isReverse ? node.x : node.x + NODE_W);
+    const y1 = pPos ? pPos.y : (node.y + (heights.get(node.id) || 150) / 2);
+
+    const pts = isReverse
+      ? [{ x: x1, y: y1 }, { x: x1 - 30, y: y1 }]
+      : [{ x: x1, y: y1 }, { x: x1 + 30, y: y1 }];
+    const temp = svg("path", { class: "wf-temp-edge", d: roundedOrthogonalPath(pts, CORNER_RADIUS) });
+    const edgesGroup = el(".wf-edges-layer", edgeSvg) || edgeSvg;
+    edgesGroup.appendChild(temp);
+
+    connectState = {
+      fromId: node.id,
+      fromPort: portId,
+      isReverse,
+      temp,
+      x1,
+      y1,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+      snapId: null,
+      snapPort: null,
+      portEl
+    };
+
+    canvas.classList.add("connecting");
+    canvas.setPointerCapture(e.pointerId);
+  }
+
   function wireNode(nodeEl, node, w) {
-    // delete (起点节点无删除按钮，必须判空)
     const delBtn = el("[data-del]", nodeEl);
     if (delBtn) {
       delBtn.addEventListener("click", e => {
@@ -502,11 +708,11 @@
       });
     }
 
-    // drag + select: whole node (except ports / delete button)
     nodeEl.addEventListener("pointerdown", e => {
       if (e.button !== 0) return;
       if (e.target.closest(".port") || e.target.closest("[data-del]")) return;
       e.stopPropagation();
+      clearClickConnect();
       dragState = {
         nodeId: node.id, el: nodeEl,
         startX: e.clientX, startY: e.clientY,
@@ -516,26 +722,18 @@
       if (WF.isEditable(w, node.id)) nodeEl.classList.add("dragging");
     });
 
-    // connect from output port
-    const outPort = el(".port.out", nodeEl);
-    if (outPort) {
+    // 绑定所有输出端口（右侧，支持多端口）
+    els(".port.out", nodeEl).forEach(outPort => {
       outPort.addEventListener("pointerdown", e => {
-        if (e.button !== 0) return;
-        if (!WF.isEditable(w, node.id)) {
-          JIGSAW.Toast.show("节点已锁定，重置后即可连线");
-          return;
-        }
-        e.stopPropagation();
-        e.preventDefault();
-        const a = nodePos(node.id);
-        const x1 = a.x + NODE_W, y1 = a.y + a.h / 2;
-        const pts = [{ x: x1, y: y1 }, { x: x1 + 30, y: y1 }];
-        const temp = svg("path", { class: "wf-temp-edge", d: roundedOrthogonalPath(pts, CORNER_RADIUS) });
-        const edgesGroup = el(".wf-edges-layer", edgeSvg) || edgeSvg;
-        edgesGroup.appendChild(temp);
-        connectState = { fromId: node.id, temp, x1, y1, snapId: null };
-        canvas.classList.add("connecting");   // 高亮所有可连的输入端口
-        canvas.setPointerCapture(e.pointerId);
+        handlePortStart(e, node, outPort.dataset.port || "out", false, outPort);
+      });
+    });
+
+    // 绑定输入端口（左侧，支持反向连线）
+    const inPort = el(".port.in", nodeEl);
+    if (inPort) {
+      inPort.addEventListener("pointerdown", e => {
+        handlePortStart(e, node, "in", true, inPort);
       });
     }
   }
@@ -545,15 +743,128 @@
     if (!inspector) return;
     const w = wf();
     const selId = Store.get().ui.selectedNodeId;
+    const selEdgeId = Store.get().ui.selectedEdgeId;
     const node = selId ? w.nodes.find(n => n.id === selId) : null;
+    const edge = selEdgeId ? w.edges.find(e => e.id === selEdgeId) : null;
 
-    if (!node) {
+    if (!node && !edge) {
       inspector.innerHTML = "";
       inspector.appendChild(h("div", { class: "inspector-empty" },
         h("div", null, Icons.icon("panel", 30)),
-        h("div", { class: "es-title" }, "未选中 Agent"),
-        h("div", { class: "es-sub" }, "选中节点以查看和编辑其配置")
+        h("div", { class: "es-title" }, "未选中元素"),
+        h("div", { class: "es-sub" }, "点击节点或连线以查看和编辑其配置")
       ));
+      return;
+    }
+
+    if (!node && edge) {
+      const fromNode = w.nodes.find(n => n.id === edge.from);
+      const toNode = w.nodes.find(n => n.id === edge.to);
+      const editable = !w.running;
+
+      const bodyChildren = [];
+
+      // 起始与目标节点
+      bodyChildren.push(
+        h("div", { class: "field" },
+          h("div", { class: "field-label" }, "起始节点与端口"),
+          h("div", { style: { padding: "7px 10px", background: "var(--bg-canvas)", border: "1px solid var(--line-1)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-1)" } },
+            `${fromNode ? fromNode.name : edge.from}  [${edge.fromPort || "out"}]`
+          )
+        ),
+        h("div", { class: "field" },
+          h("div", { class: "field-label" }, "目标节点与端口"),
+          h("div", { style: { padding: "7px 10px", background: "var(--bg-canvas)", border: "1px solid var(--line-1)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-1)" } },
+            `${toNode ? toNode.name : edge.to}  [${edge.toPort || "in"}]`
+          )
+        )
+      );
+
+      // 分支类型
+      const branchDescMap = {
+        out: "标准输出流 (Default Out)",
+        true: "True 分支 (条件满足)",
+        false: "False 分支 (条件不满足)",
+        loop: "Loop 分支 (闭环迭代)",
+        done: "Done 分支 (循环结束)",
+        try: "Try 分支 (受保护主流程)",
+        catch: "Catch 分支 (异常接管流程)"
+      };
+      bodyChildren.push(
+        h("div", { class: "field" },
+          h("div", { class: "field-label" }, "分支属性"),
+          h("div", { style: { fontSize: "12px", color: "var(--text-2)", padding: "2px 0" } },
+            branchDescMap[edge.fromPort] || "通用连线"
+          )
+        )
+      );
+
+      // 连线说明标签 (Canvas Pill)
+      const labelInput = h("input", {
+        class: "input",
+        type: "text",
+        placeholder: edge.fromPort === "true" ? "True" : edge.fromPort === "false" ? "False" : "输入连线说明...",
+        value: edge.label || "",
+        disabled: editable ? null : true
+      });
+      labelInput.addEventListener("input", () => {
+        if (!editable) return;
+        edge.label = labelInput.value.trim();
+        Store.notify("workflows");
+      });
+      bodyChildren.push(
+        h("div", { class: "field" },
+          h("div", { class: "field-label" }, "连线说明标签 (Canvas Pill)"),
+          labelInput
+        )
+      );
+
+      // 标记为迭代回环 (Loop Back)
+      const loopLabel = h("label", { style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", cursor: editable ? "pointer" : "default" } },
+        h("input", {
+          type: "checkbox",
+          checked: !!edge.isLoop,
+          disabled: editable ? null : true
+        }),
+        h("span", null, "标记为迭代回环 (Loop Back)")
+      );
+      const loopCheck = loopLabel.querySelector("input");
+      loopCheck.addEventListener("change", () => {
+        if (!editable) return;
+        edge.isLoop = loopCheck.checked;
+        Store.notify("workflows");
+      });
+      bodyChildren.push(
+        h("div", { class: "field" },
+          h("div", { class: "field-label" }, "流转控制"),
+          loopLabel
+        )
+      );
+
+      // 删除连线
+      if (editable) {
+        const delBtn = h("button", {
+          class: "btn btn-sm",
+          style: { borderColor: "var(--line-strong)", color: "var(--text-1)", width: "100%", marginTop: "var(--sp-2)" }
+        }, Icons.icon("trash", 13), "删除连线 (Delete)");
+        delBtn.addEventListener("click", () => {
+          if (WF.removeEdge(w.id, edge.id)) {
+            JIGSAW.Toast.show("已删除连线");
+            Store.get().ui.selectedEdgeId = null;
+            renderWorkflow();
+            renderInspector();
+          }
+        });
+        bodyChildren.push(h("div", { class: "inspector-danger" }, delBtn));
+      }
+
+      const body = h("div", { class: "inspector-body" }, ...bodyChildren);
+      inspector.innerHTML = "";
+      inspector.appendChild(h("div", { class: "inspector-head" },
+        Icons.icon("arrow-right", 14),
+        h("span", null, "连线检查器 (Edge Inspector)")
+      ));
+      inspector.appendChild(body);
       return;
     }
 
@@ -570,6 +881,26 @@
     const modelSel = h("select", { class: "select", disabled: editable ? null : true, "data-f": "modelId" });
     JIGSAW.ModelService.populate(modelSel, node.modelId);
     if (!JIGSAW.ModelService.list().length) modelSel.disabled = true;
+
+    const imageModelSel = h("select", { class: "select", disabled: editable ? null : true, "data-f": "imageModelId" });
+    const imgList = (JIGSAW.ImageService && JIGSAW.ImageService.list()) || [];
+    if (!imgList.length) {
+      imageModelSel.appendChild(h("option", { value: "" }, "未配置生图模型（请在设置中配置）"));
+      imageModelSel.disabled = true;
+    } else {
+      imgList.forEach(m => {
+        const opt = h("option", { value: m.id }, `${m.name} (${m.modelId})`);
+        if (node.imageModelId === m.id || (!node.imageModelId && m.id === ((JIGSAW.ImageService.getActive() || {}).id))) {
+          opt.selected = true;
+        }
+        imageModelSel.appendChild(opt);
+      });
+    }
+    imageModelSel.addEventListener("change", () => {
+      node.imageModelId = imageModelSel.value;
+      WF.updateNode(w.id, node.id, { imageModelId: node.imageModelId });
+      renderWorkflow();
+    });
 
     /*
       工具区：只列后端真实注册的工具（ToolService ← /api/tools）。
@@ -601,6 +932,7 @@
           WF.updateNode(w.id, node.id, { tools: node.tools.slice() });
           chip.classList.toggle("on", node.tools.includes(t.name));
           renderWorkflow();
+          if (t.name === "generate_image") renderInspector();
         });
         toolsWrap.appendChild(chip);
       });
@@ -631,7 +963,7 @@
     const bodyChildren = [
       !editable ? h("div", { class: "inspector-lock-notice" },
         Icons.icon("lock", 13),
-        h("span", null, "该节点已锁定。已完成或运行中的节点不可修改——仅待执行节点可编辑。")
+        h("span", null, "工作流运行中，执行完成后可随时编辑配置。")
       ) : null,
       field(isLogic ? "节点名称" : "Agent 名称", nameInput),
       field("描述", descInput)
@@ -645,11 +977,53 @@
         });
         bodyChildren.push(field("最大循环轮次 (Max Loops)", loopInput));
       }
-      bodyChildren.push(field("逻辑说明 / 条件提示", sysInput));
-      bodyChildren.push(field("输入", ioBox(node.input)));
-      bodyChildren.push(field("输出", ioBox(node.output)));
+      if (node.agentType === "condition_if") {
+        const condSel = h("select", { class: "select", disabled: editable ? null : true, "data-f": "conditionOutcome" },
+          h("option", { value: "true" }, "条件判定：满足 (走向 True 分支)"),
+          h("option", { value: "false" }, "条件判定：不满足 (走向 False 分支)")
+        );
+        condSel.value = node.conditionOutcome || "true";
+        bodyChildren.push(field("判定结果模拟 (Branch)", condSel, "（模拟判断结果，决定激活 True 还是 False 分支）"));
+      }
+      if (node.agentType === "start") {
+        const startPromptInput = h("textarea", {
+          class: "input tall",
+          rows: "4",
+          placeholder: "输入给 Captain Agent 或整个工作流的初始任务目标，如：帮我对比北京和上海的文旅发展现状",
+          disabled: editable ? null : true,
+          "data-f": "output"
+        }, node.output || "");
+
+        const planNowBtn = h("button", {
+          class: "btn btn-sm",
+          type: "button",
+          style: {
+            marginTop: "8px",
+            width: "100%",
+            background: "linear-gradient(135deg, rgba(37,99,235,0.2), rgba(124,58,237,0.25))",
+            borderColor: "rgba(124,58,237,0.45)",
+            color: "#c4b5fd",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "6px"
+          }
+        }, Icons.icon("sparkles", 13), "✨ 由 Captain 规划拓扑并生成图层");
+        planNowBtn.addEventListener("click", () => {
+          showAutoPlanModal(startPromptInput.value || node.output);
+        });
+
+        bodyChildren.push(field("初始任务目标 (Task Prompt)", h("div", null, startPromptInput, planNowBtn), "（可直接输入目标并一键让 Captain Agent 拆解生成拓扑图）"));
+      } else {
+        bodyChildren.push(field("逻辑说明 / 条件提示", sysInput));
+        bodyChildren.push(field("输入", ioBox(node.input)));
+        bodyChildren.push(field("输出", ioBox(node.output)));
+      }
     } else {
       bodyChildren.push(field("模型", modelSel));
+      if (node.tools && node.tools.includes("generate_image")) {
+        bodyChildren.push(field("AI 绘图模型 (Image Model)", imageModelSel, "（当前 Agent 生成图片时使用的生图服务与模型）"));
+      }
       bodyChildren.push(field("系统提示词", sysInput));
       bodyChildren.push(field("输入", ioBox(node.input)));
       bodyChildren.push(field("输出", ioBox(node.output)));
@@ -697,6 +1071,19 @@
 
       bodyChildren.push(
         field("异常容错策略 (Error Policy)", h("div", null, errorSel, fallbackWrap, simErrWrap))
+      );
+    }
+
+    const inEdgesCount = w.edges.filter(e => e.to === node.id).length;
+    if (inEdgesCount > 1 || node.joinRule) {
+      const joinSel = h("select", { class: "select", disabled: editable ? null : true, "data-f": "joinRule" },
+        h("option", { value: "tolerant_and" }, "弹性汇合 (AND·部分成功即放行)"),
+        h("option", { value: "strict_and" }, "严格汇合 (AND·必须全部成功)"),
+        h("option", { value: "any_or" }, "竞速汇合 (OR·任一成功即触发)")
+      );
+      joinSel.value = node.joinRule || "tolerant_and";
+      bodyChildren.push(
+        field("多路汇合逻辑 (Join Barrier)", joinSel)
       );
     }
 
@@ -852,10 +1239,124 @@
     return wrap;
   }
 
+  /* ---------- Captain Agent 拓扑自主规划弹窗 (Text-to-Workflow) ---------- */
+  function showAutoPlanModal(initialPrompt) {
+    const w = wf();
+    if (!w) return;
+    if (w.running) { JIGSAW.Toast.show("工作流运行中，不可重新规划"); return; }
+    const startNode = w.nodes.find(n => n.agentType === "start");
+    const initVal = initialPrompt || (startNode && startNode.output !== "初始任务提示词" ? startNode.output : "") || "";
+
+    const overlay = h("div", { class: "ask-overlay" });
+    const box = h("div", { class: "ask-box", style: { width: "520px", display: "flex", flexDirection: "column", gap: "14px" } });
+
+    const title = h("div", { class: "ask-title", style: { display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", fontWeight: "600", color: "var(--text-1)" } },
+      Icons.icon("agent", 16), "Captain Agent · 拓扑自主规划"
+    );
+
+    const desc = h("div", { style: { fontSize: "12px", color: "var(--text-3)", lineHeight: "1.6" } },
+      "输入任务需求或调研目标，由指定的主控智能体（Captain Agent）自动拆解业务意图，生成多智能体节点、逻辑汇聚栅栏并在画布完成连线排版。"
+    );
+
+    let selectedCaptainModelId = getActiveChatModelId();
+
+    const modelRow = h("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "8px 12px",
+        background: "var(--bg-overlay)",
+        border: "1px solid var(--line-strong)",
+        borderRadius: "var(--rad-sm)",
+        gap: "12px"
+      }
+    },
+      h("div", { style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--text-1)", fontWeight: "500" } },
+        Icons.icon("cpu", 13),
+        "主控智能体模型"
+      ),
+      JIGSAW.Dropdown.create(
+        () => getChatModels(),
+        selectedCaptainModelId,
+        id => {
+          selectedCaptainModelId = id;
+          const curW = wf();
+          if (curW) curW.captainModelId = id;
+          const curC = JIGSAW.ChatService && JIGSAW.ChatService.get(convId);
+          if (curC) curC.captainModelId = id;
+        },
+        { small: true, icon: "agent", title: "选择负责拓扑自主规划的主控大模型" }
+      )
+    );
+
+    const textarea = h("textarea", {
+      class: "input tall",
+      rows: "4",
+      placeholder: "请输入任务需求或调研目标（例如：全面调研华为智能汽车业务的市场规模、技术壁垒与竞争格局，生成深度研报）",
+      style: { width: "100%", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }
+    }, initVal);
+
+    const actions = h("div", { class: "ask-actions", style: { display: "flex", justifyContent: "flex-end", gap: "8px" } });
+    const cancelBtn = h("button", { class: "btn btn-sm", type: "button" }, "取消");
+    const okBtn = h("button", {
+      class: "btn btn-sm btn-primary",
+      type: "button",
+      style: { display: "inline-flex", alignItems: "center", gap: "6px" }
+    }, Icons.icon("sparkles", 13), "开始规划建图");
+
+    actions.append(cancelBtn, okBtn);
+    box.append(title, desc, modelRow, textarea, actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    cancelBtn.addEventListener("click", close);
+    overlay.addEventListener("mousedown", e => { if (e.target === overlay) close(); });
+
+    okBtn.addEventListener("click", async () => {
+      const prompt = textarea.value.trim();
+      if (!prompt) {
+        JIGSAW.Toast.show("请输入任务需求或目标");
+        textarea.focus();
+        return;
+      }
+      okBtn.disabled = true;
+      okBtn.textContent = "Captain 规划建图中…";
+      try {
+        await WF.autoPlanWorkflow(w.id, prompt, selectedCaptainModelId);
+        close();
+        renderWorkflow();
+        renderInspector();
+        fitView();
+        JIGSAW.Toast.show("Captain Agent 拓扑已生成！已在画布自动连线排版");
+      } catch (err) {
+        okBtn.disabled = false;
+        okBtn.innerHTML = Icons.icon("sparkles", 13) + " 开始规划建图";
+        JIGSAW.Toast.show("规划失败：" + (err.message || err));
+      }
+    });
+
+    setTimeout(() => textarea.focus(), 50);
+  }
+
   function renderTopbar() {
     const conv = JIGSAW.ChatService.get(convId);
     const tb = el(".wf-topbar", container);
     tb.innerHTML = "";
+
+    const autoPlanBtn = h("button", {
+      class: "btn btn-sm btn-subtle",
+      "data-autoplan": "1",
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px"
+      },
+      title: "Captain Agent 智能规划：自然语言一键生成多智能体拓扑与连线"
+    }, Icons.icon("sparkles", 13), "AI 自动编排");
+    autoPlanBtn.addEventListener("click", () => showAutoPlanModal());
+
     const addWrap = h("div", { class: "add-node-wrap" });
     const addBtn = h("button", { class: "btn btn-sm", "data-add-node": "1", title: "添加新节点" }, Icons.icon("plus-sm", 13), "添加节点");
     const pop = h("div", { class: "wf-popover" });
@@ -924,16 +1425,35 @@
           h("span", { class: "legend-item" }, h("span", { class: "legend-swatch s-waiting" }), "等待中"),
           h("span", { class: "legend-item" }, h("span", { class: "legend-swatch s-running" }), "运行中"),
           h("span", { class: "legend-item" }, h("span", { class: "legend-swatch s-success" }), "已完成"),
+          h("span", { class: "legend-item" }, h("span", { class: "legend-swatch s-skipped" }), "已跳过"),
           h("span", { class: "legend-item" }, h("span", { class: "legend-swatch s-failed" }), "失败")
         ),
+        autoPlanBtn,
         addWrap,
         resetBtn = h("button", { class: "btn btn-sm", "data-reset": "1", title: "重置并解锁全部节点" }, Icons.icon("reset", 13), "重置"),
+        exportSvgBtn = h("button", { class: "btn btn-sm", "data-export-svg": "1", title: "导出当前工作流为矢量 SVG 文件", style: { display: "inline-flex", alignItems: "center", gap: "5px" } }, Icons.icon("download", 13), "导出 SVG"),
         runBtn = h("button", { class: "btn btn-sm btn-primary", "data-run": "1" })
       )
     );
     el("[data-history]", tb).addEventListener("click", () => JIGSAW.HistoryDrawer.toggle());
     el("[data-home]", tb).addEventListener("click", () => JIGSAW.Router.navigate("/"));
     resetBtn.addEventListener("click", () => { WF.reset(wf().id); updateRunBtn(); renderWorkflow(); renderInspector(); });
+    exportSvgBtn.addEventListener("click", () => {
+      const w = wf();
+      if (!w || !w.nodes.length) {
+        JIGSAW.Toast.show("画布为空，暂无节点可导出");
+        return;
+      }
+      const svgContent = WF.toSvg(w.id);
+      const blob = new Blob([svgContent], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `workflow-${convId}.svg`;
+      a.click();
+      URL.revokeObjectURL(url);
+      JIGSAW.Toast.show("✨ 已成功导出工作流为 SVG 矢量图！");
+    });
     runBtn.addEventListener("click", () => {
       const w = wf();
       if (w.running) { EX.stop(convId); updateRunBtn(); return; }
@@ -995,52 +1515,77 @@
         return;
       }
       if (connectState) {
+        const dx = Math.abs(e.clientX - connectState.startX);
+        const dy = Math.abs(e.clientY - connectState.startY);
+        if (dx + dy > 3) connectState.moved = true;
+
         const rect = canvas.getBoundingClientRect();
         let wx = (e.clientX - rect.left - pan.x) / zoom;
         let wy = (e.clientY - rect.top - pan.y) / zoom;
 
-        // 磁吸自动吸附（Auto-Snap）：寻找吸附范围（36px）内最近的可连接目标输入端口
+        // 磁吸自动吸附（Auto-Snap）：寻找吸附范围（38px）内最近的可连接目标端口
         const w = wf();
         let bestTarget = null;
-        let minDist = 36;
+        let minDist = 38;
 
         w.nodes.forEach(n => {
           if (n.id === connectState.fromId) return;
           if (!WF.isEditable(w, n.id)) return;
-          const pos = nodePos(n.id);
-          if (!pos) return;
-          const px = pos.x;
-          const py = pos.y + pos.h / 2;
-          const dist = Math.hypot(wx - px, wy - py);
-          if (dist < minDist) {
-            minDist = dist;
-            bestTarget = { id: n.id, x: px, y: py };
+
+          if (!connectState.isReverse) {
+            // 正向拖拽：寻找目标节点的输入端口 "in"
+            if (n.agentType === "start") return;
+            const pt = portPos(n.id, "in");
+            if (pt) {
+              const dist = Math.hypot(wx - pt.x, wy - pt.y);
+              if (dist < minDist) {
+                minDist = dist;
+                bestTarget = { id: n.id, port: "in", x: pt.x, y: pt.y };
+              }
+            }
+          } else {
+            // 反向拖拽：寻找目标节点的各输出端口
+            const outPorts = WF.getNodeOutputPorts(n);
+            outPorts.forEach(op => {
+              const pt = portPos(n.id, op.id);
+              if (pt) {
+                const dist = Math.hypot(wx - pt.x, wy - pt.y);
+                if (dist < minDist) {
+                  minDist = dist;
+                  bestTarget = { id: n.id, port: op.id, x: pt.x, y: pt.y };
+                }
+              }
+            });
           }
         });
 
-        els(".port.in.snap-active", world).forEach(p => p.classList.remove("snap-active"));
+        els(".port.snap-active", world).forEach(p => p.classList.remove("snap-active"));
         if (bestTarget) {
           wx = bestTarget.x;
           wy = bestTarget.y;
           connectState.snapId = bestTarget.id;
+          connectState.snapPort = bestTarget.port;
           const targetNodeEl = el(`.wf-node[data-id="${bestTarget.id}"]`, world);
           if (targetNodeEl) {
-            const inPort = el(".port.in", targetNodeEl);
-            if (inPort) inPort.classList.add("snap-active");
+            const targetPortEl = el(`.port[data-port="${bestTarget.port}"]`, targetNodeEl);
+            if (targetPortEl) targetPortEl.classList.add("snap-active");
           }
         } else {
           connectState.snapId = null;
+          connectState.snapPort = null;
         }
 
         const fromBox = nodePos(connectState.fromId);
+        const startPt = { x: connectState.x1, y: connectState.y1 };
         let pts;
         if (bestTarget) {
           const toBox = nodePos(bestTarget.id);
-          pts = (fromBox && toBox)
-            ? getOrthogonalPoints(fromBox, toBox)
-            : getTempOrthogonalPoints(fromBox, wx, wy);
+          pts = (!connectState.isReverse)
+            ? getOrthogonalPoints(fromBox, toBox, false, connectState.fromPort, bestTarget.port, connectState.fromId, bestTarget.id)
+            : getOrthogonalPoints(toBox, fromBox, false, bestTarget.port, connectState.fromPort, bestTarget.id, connectState.fromId);
+          if (connectState.isReverse) pts.reverse();
         } else {
-          pts = getTempOrthogonalPoints(fromBox, wx, wy);
+          pts = getTempOrthogonalPoints(fromBox, wx, wy, startPt, connectState.isReverse);
         }
         connectState.temp.setAttribute("d", roundedOrthogonalPath(pts, CORNER_RADIUS));
         return;
@@ -1067,40 +1612,54 @@
         dragState = null;
       }
       if (connectState) {
-        const { fromId, temp, snapId } = connectState;
-        els(".port.in.snap-active", world).forEach(p => p.classList.remove("snap-active"));
+        const { fromId, fromPort, isReverse, temp, snapId, snapPort, moved, portEl } = connectState;
+        els(".port.snap-active", world).forEach(p => p.classList.remove("snap-active"));
         temp.remove();
         connectState = null;
+
+        if (!moved) {
+          // 点击了端口而未产生拖拽移动 -> 开启 Click-to-Connect 状态
+          clearClickConnect();
+          clickConnectSource = { nodeId: fromId, portId: fromPort, isReverse, portEl };
+          if (portEl) portEl.classList.add("active-connect-source");
+          canvas.classList.add("connecting");
+          JIGSAW.Toast.show("已选中起始端口，请点击目标端口完成连接 (Esc 取消)");
+          return;
+        }
+
         canvas.classList.remove("connecting");
 
-        // 优先使用磁吸命中的目标，其次检查光标落点
+        // 拖拽松手：优先使用磁吸目标，其次检查落点
         let toId = snapId;
+        let toPort = snapPort;
         if (!toId) {
           const target = document.elementFromPoint(e.clientX, e.clientY);
-          const hit = target && target.closest
-            ? (target.closest(".port.in") || target.closest(".wf-node"))
-            : null;
-          const toNode = hit ? hit.closest(".wf-node") : null;
-          if (toNode) toId = toNode.dataset.id;
+          const hitPort = target && target.closest ? target.closest(".port") : null;
+          if (hitPort) {
+            const hitNode = hitPort.closest(".wf-node");
+            if (hitNode) {
+              toId = hitNode.dataset.id;
+              toPort = hitPort.dataset.port;
+            }
+          }
         }
 
         if (toId) {
           const w = wf();
-          const ok = WF.addEdge(w.id, fromId, toId);
-          if (ok) {
-            JIGSAW.Toast.show("已添加连线");
-            renderWorkflow();
-          } else if (toId === fromId) {
+          const actualFromId = isReverse ? toId : fromId;
+          const actualFromPort = isReverse ? (toPort || "out") : (fromPort || "out");
+          const actualToId = isReverse ? fromId : toId;
+          const actualToPort = "in"; // 规范化目标端口：永远连接到卡片左侧输入端，避免大回环绕线
+
+          if (actualFromId === actualToId) {
             JIGSAW.Toast.show("不能连自己");
           } else {
-            if (w.running) {
-              JIGSAW.Toast.show("运行中不可修改画布，请先停止");
-            } else if (!WF.isEditable(w, fromId) || !WF.isEditable(w, toId)) {
-              JIGSAW.Toast.show("节点已锁定，点「重置」解锁后可连线");
-            } else if (w.edges.some(ed => ed.from === fromId && ed.to === toId)) {
-              JIGSAW.Toast.show("该连线已存在");
+            const ok = WF.addEdge(w.id, actualFromId, actualToId, actualFromPort, actualToPort);
+            if (ok) {
+              JIGSAW.Toast.show("已添加连线");
+              renderWorkflow();
             } else {
-              JIGSAW.Toast.show("无法连线");
+              JIGSAW.Toast.show("无法连线或连线已存在");
             }
           }
         }
@@ -1110,6 +1669,7 @@
         panState = null;
         canvas.classList.remove("panning");
         if (!wasMoved) {
+          clearClickConnect();
           // background click → deselect
           Store.get().ui.selectedNodeId = null;
           Store.get().ui.selectedEdgeId = null;
@@ -1128,19 +1688,37 @@
     els(".wf-edge", edgesGroup).forEach(path => {
       const edge = w.edges.find(ed => ed.id === path.dataset.eid);
       if (edge && (edge.from === nodeId || edge.to === nodeId)) {
-        path.setAttribute("d", edgePath(edge.from, edge.to, !!edge.isLoop));
+        path.setAttribute("d", edgePath(edge.from, edge.to, !!edge.isLoop, edge.fromPort || "out", edge.toPort || "in"));
       }
     });
+    // 连线标签与删除按钮同步重绘定位
+    renderWorkflow();
   }
 
   /* ---------- keyboard ---------- */
   function onKey(e) {
-    // 聚焦在任何输入框、文本域或可编辑区域时，绝对不拦截 Delete / Backspace 等按键
+    if (e.key === "Escape") {
+      if (clickConnectSource) {
+        clearClickConnect();
+        return;
+      }
+      if (Store.get().ui.selectedNodeId || Store.get().ui.selectedEdgeId) {
+        Store.get().ui.selectedNodeId = null;
+        Store.get().ui.selectedEdgeId = null;
+        Store.notify("ui");
+        renderWorkflow();
+      } else {
+        JIGSAW.HistoryDrawer.close();
+      }
+      return;
+    }
+
+    // 聚焦在任何输入框、文本域或可编辑区域时，绝对不拦截 Delete 等按键
     if (e.target && (e.target.closest("input, textarea, select, [contenteditable]") || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) {
       return;
     }
 
-    // 仅响应 Delete 键（移除容易引起误触的 Backspace 退格键）
+    // 仅响应 Delete 键
     if (e.key === "Delete") {
       const selEdge = Store.get().ui.selectedEdgeId;
       const sel = Store.get().ui.selectedNodeId;
@@ -1152,19 +1730,15 @@
         return;
       }
       if (sel && wf()) {
+        const node = wf().nodes.find(n => n.id === sel);
+        if (node && node.agentType === "start") return;
+        if (!WF.isEditable(wf(), sel)) return;
         e.preventDefault();
         if (WF.removeNode(wf().id, sel)) JIGSAW.Toast.show("已删除节点");
         Store.get().ui.selectedNodeId = null;
         Store.notify("ui");
-      }
-    } else if (e.key === "Escape") {
-      if (Store.get().ui.selectedNodeId || Store.get().ui.selectedEdgeId) {
-        Store.get().ui.selectedNodeId = null;
-        Store.get().ui.selectedEdgeId = null;
-        Store.notify("ui");
         renderWorkflow();
       }
-      else JIGSAW.HistoryDrawer.close();
     }
   }
 
@@ -1252,11 +1826,24 @@
       window.addEventListener("keydown", onKey);
       const closePop = e => { if (addPop && !e.target.closest(".add-node-wrap")) addPop.classList.remove("open"); };
       document.addEventListener("click", closePop);
+      let lastNodeCount = (w && w.nodes) ? w.nodes.length : 0;
       unsubs = [
         Store.subscribe("workflows", () => {
+          const currentWf = wf();
+          const prevCount = lastNodeCount;
+          const currentCount = (currentWf && currentWf.nodes) ? currentWf.nodes.length : 0;
+          lastNodeCount = currentCount;
+
           renderWorkflow();
-          renderInspector();
+          if (!inspector || !inspector.contains(document.activeElement)) {
+            renderInspector();
+          }
           updateRunBtn();
+
+          // 当拓扑从空白/仅起点被自动规划生成时，自动居中聚焦
+          if (prevCount <= 1 && currentCount > 1) {
+            setTimeout(() => fitView(), 40);
+          }
         }),
         Store.subscribe("conversations", () => {
           renderTopbar();

@@ -219,8 +219,9 @@ def run(args: dict) -> str:
             return f"生成图片失败：响应中无可用图片链接或数据（响应：{first}）"
 
         norm_path = local_path.replace("\\", "/")
+        clean_alt = "AI 高清绘图成品"
         return (
-            f"![{prompt}]({norm_path})\n\n"
+            f"![{clean_alt}]({norm_path})\n\n"
             f"**图片已生成完成**\n"
             f"- **模型**：`{model}`\n"
             f"- **画幅比例**：{aspect_ratio}\n"

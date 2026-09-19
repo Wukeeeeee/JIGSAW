@@ -48,23 +48,42 @@
 
     // 支持“数组”或“函数”两种传法：函数时每次打开取最新
     function current() { return typeof options === "function" ? options() : options; }
+    function getSelectedId() { return typeof selectedId === "function" ? selectedId() : selectedId; }
 
     function render() {
-      const opts = current();
+      const opts = current() || [];
       menu.innerHTML = "";
-      const cur = opts.find(o => o.id === selectedId) || opts[0];
-      label.textContent = cur ? cur.name : "选择模型";
+      const curId = getSelectedId();
+      const cur = opts.find(o => o.id === curId) || opts[0];
+      label.textContent = cur ? cur.name : (st.emptyText || st.placeholder || "选择模型");
+      if (st.title) btn.title = st.title + (cur ? ` (当前: ${cur.name})` : "");
+
+      if (!opts.length) {
+        const emptyItem = h("div", {
+          class: "dd-empty",
+          style: {
+            padding: "8px 12px",
+            fontSize: "12px",
+            color: "var(--text-3)",
+            whiteSpace: "nowrap"
+          }
+        }, st.emptyText || "暂无可选项");
+        menu.appendChild(emptyItem);
+        return;
+      }
+
       opts.forEach(o => {
+        const isSel = (cur && cur.id === o.id) || o.id === curId;
         const item = h("button", {
-          class: "dd-item" + (o.id === selectedId ? " sel" : ""),
+          class: "dd-item" + (isSel ? " sel" : ""),
           type: "button"
         }, null);
         item.append(h("span", { class: "dd-name" }, o.name));
         if (o.desc) item.append(h("span", { class: "dd-desc" }, o.desc));
         // 选中项右侧打 √（当前选中）
-        if (o.id === selectedId) item.append(h("span", { class: "dd-check" }, Icons.icon("check", 12)));
+        if (isSel) item.append(h("span", { class: "dd-check" }, Icons.icon("check", 12)));
         item.addEventListener("click", () => {
-          selectedId = o.id;
+          if (typeof selectedId !== "function") selectedId = o.id;
           onChange(o.id);
           closeAll();
           render();
@@ -94,6 +113,11 @@
       }
     });
 
+    wrap.render = render;
+    wrap.setSelected = id => {
+      if (typeof selectedId !== "function") selectedId = id;
+      render();
+    };
     render();
     return wrap;
   }

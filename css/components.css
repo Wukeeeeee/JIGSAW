@@ -323,6 +323,7 @@ html[data-theme="light"] .toggle.on::after { background: #fff; }
 .legend-swatch.s-waiting { border-color: var(--st-waiting); background: var(--st-waiting); }
 .legend-swatch.s-running { border-color: var(--st-running); background: var(--st-running); animation: badgePulse 1s ease-in-out infinite; }
 .legend-swatch.s-success { border-color: var(--st-success); background: var(--st-success); }
+.legend-swatch.s-skipped { border-color: var(--st-skipped); background: var(--st-skipped); opacity: .7; }
 .legend-swatch.s-failed { border-color: var(--st-failed); background: var(--st-failed); }
 
 /* ============================================================

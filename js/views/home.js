@@ -8,34 +8,67 @@
   let ta = null;
   let currentMode = "chat"; // "chat" | "workflow"
 
-  function submit(text) {
+  let imgDd = null;
+  let modelDd = null;
+  let unsubs = [];
+
+  async function submit(text) {
     text = (text || "").trim();
     if (currentMode === "chat") {
       if (!text) return;
-      const conv = JIGSAW.ChatService.create({ text });
+      const activeImg = JIGSAW.ImageService && JIGSAW.ImageService.getActive();
+      const activeModel = JIGSAW.ModelService && JIGSAW.ModelService.getActive();
+      const conv = JIGSAW.ChatService.create({
+        text,
+        modelId: activeModel ? activeModel.id : undefined,
+        imageModelId: activeImg ? activeImg.id : undefined
+      });
       JIGSAW.Router.navigate("/chat/" + conv.id);
     } else {
-      // 画布编排模式：即便留空也可以直接进入画布进行空白编排
+      // 画布编排模式：
+      // 如果输入了内容，按回车或点击直接自动规划生成完整的多智能体工作流！
       const title = text ? text.slice(0, 48) : "未命名工作流";
       const conv = JIGSAW.ChatService.create({ title, text: "" });
-      if (text) {
-        const wf = JIGSAW.WorkflowService.getForConversation(conv.id);
-        const startNode = wf && wf.nodes && wf.nodes.find(n => n.agentType === "start");
+      const wf = JIGSAW.WorkflowService.getForConversation(conv.id);
+      if (text && wf) {
+        const startNode = wf.nodes && wf.nodes.find(n => n.agentType === "start");
         if (startNode) {
           startNode.output = text;
           Store.notify("workflows");
+        }
+        const activeModel = JIGSAW.ModelService && JIGSAW.ModelService.getActive();
+        const sendBtn = el("[data-send]");
+        if (sendBtn) {
+          sendBtn.disabled = true;
+          sendBtn.innerHTML = Icons.icon("loader", 16);
+        }
+        try {
+          await JIGSAW.WorkflowService.autoPlanWorkflow(wf.id, text, activeModel ? activeModel.id : undefined);
+        } catch (err) {
+          console.warn("主页直接生成工作流异常，进入画布手动编排:", err);
         }
       }
       JIGSAW.Router.navigate("/chat/" + conv.id + "/workflow");
     }
   }
 
+  function renderImageModelSelect() {
+    imgDd = JIGSAW.Dropdown.create(
+      () => (JIGSAW.ImageService ? JIGSAW.ImageService.list() : []),
+      () => (JIGSAW.ImageService && JIGSAW.ImageService.getActive() ? JIGSAW.ImageService.getActive().id : ""),
+      id => { if (JIGSAW.ImageService) JIGSAW.ImageService.setActive(id); },
+      { icon: "image", placeholder: "生图模型", emptyText: "未配置生图模型", title: "AI 绘图模型 (Image Model)" }
+    );
+    return imgDd;
+  }
+
   function renderModelSelect() {
-    // 自绘直角下拉（原生 select 的弹出面板是圆角的，改不了，已替换）
-    // 传“函数”而非数组：每次打开下拉都读取最新模型列表
-    // 宽度随选中文字自适应，右缘贴紧发送按钮
-    const dd = JIGSAW.Dropdown.create(() => JIGSAW.ModelService.list(), JIGSAW.ModelService.getActive().id, id => JIGSAW.ModelService.setActive(id));
-    return dd;
+    modelDd = JIGSAW.Dropdown.create(
+      () => JIGSAW.ModelService.list(),
+      () => (JIGSAW.ModelService && JIGSAW.ModelService.getActive() ? JIGSAW.ModelService.getActive().id : ""),
+      id => JIGSAW.ModelService.setActive(id)
+    );
+    return modelDd;
   }
 
   const Home = {
@@ -81,6 +114,7 @@
                 h("button", { class: "cwd-btn", "data-cwd": "1", title: "选择目录，进入项目工作" }, "项目"),
                 h("div", { class: "home-input-actions-right" },
                   h("div", { class: "perm-dd", "data-perm-dd": "1", title: "权限级别" }),
+                  h("div", { class: "img-dd", title: "AI 绘图模型" }, renderImageModelSelect()),
                   renderModelSelect(),
                   h("button", { class: "send-btn", "data-send": "1", title: "发送" }, Icons.icon("arrowUp", 16))
                 )
@@ -214,11 +248,28 @@
         }
       });
 
+      // 监听模型与配置变更，自动刷新下拉选框
+      unsubs = [
+        Store.subscribe("settings", () => {
+          if (imgDd && imgDd.render) imgDd.render();
+          if (modelDd && modelDd.render) modelDd.render();
+        }),
+        Store.subscribe("image-model", () => {
+          if (imgDd && imgDd.render) imgDd.render();
+        }),
+        Store.subscribe("model", () => {
+          if (modelDd && modelDd.render) modelDd.render();
+        })
+      ];
+
       // 聚焦输入框
       setTimeout(() => ta.focus(), 50);
     },
 
-    unmount() { }
+    unmount() {
+      unsubs.forEach(u => typeof u === "function" && u());
+      unsubs = [];
+    }
   };
 
   JIGSAW.Views = JIGSAW.Views || {};

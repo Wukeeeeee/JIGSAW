@@ -137,3 +137,20 @@ def toggle_tool(name: str, payload: ToggleIn):
     if not ok:
         return {"ok": False, "error": f"工具 {name} 不存在"}
     return {"ok": True, "name": name, "enabled": payload.enabled}
+
+
+class ExecuteIn(BaseModel):
+    name: str
+    args: dict = {}
+
+
+@router.post("/tools/execute")
+def execute_tool_endpoint(payload: ExecuteIn):
+    """通用工具执行接口（用于工作流节点自动生图、设置页测试工具等）。"""
+    from tools import execute
+    try:
+        res = execute(payload.name, payload.args or {})
+        return {"ok": True, "result": res}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
