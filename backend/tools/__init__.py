@@ -200,7 +200,8 @@ def _tool_meta(name: str, t: dict, enabled: bool) -> dict:
 # ============================================================
 
 from . import (ask_user, fetch_url, shell, time, websearch, editfile, apply_patch,
-               calc, read_extra, knowledge_search, knowledge_info, knowledge_write, generate_image)
+               calc, read_extra, knowledge_search, knowledge_info, knowledge_write, generate_image,
+               read_file, list_files, grep)
 
 
 TOOLS = {
@@ -267,6 +268,27 @@ TOOLS = {
         "icon": "readfile",
         "label": "读取文件",
         "desc": "读取Excel,Word,PPT等文件"
+    },
+    "read_file": {
+        "schema": read_file.SCHEMA,
+        "run": read_file.run,
+        "icon": "readfile",
+        "label": "读取文本文件",
+        "desc": "读取代码/配置/Markdown 等文本文件（带行号，支持 offset/limit 分页；Word/PDF 用「读取文件」）"
+    },
+    "list_files": {
+        "schema": list_files.SCHEMA,
+        "run": list_files.run,
+        "icon": "folder",
+        "label": "列出文件",
+        "desc": "列出目录结构与文件大小（自动忽略 node_modules/.git 等），用于了解项目布局"
+    },
+    "grep": {
+        "schema": grep.SCHEMA,
+        "run": grep.run,
+        "icon": "search",
+        "label": "内容搜索",
+        "desc": "按正则搜索文件内容，返回 文件:行号:匹配行（跳过二进制与依赖目录）"
     },
     "knowledge_search": {
         "schema": knowledge_search.SCHEMA,

@@ -32,17 +32,3 @@ class TextEmbedding:
         vecs = self.model.encode(texts, normalize_embeddings=True)
         return vecs.tolist()
 
-
-if __name__ == "__main__":
-    te = TextEmbedding()
-    test_chunk = (
-        "你说得对，但是《原神》是由米哈游自主研发的一款全新开放世界冒险游戏。"
-        "游戏发生在一个被称作「提瓦特」的幻想世界，在这里，被神选中的人将被授予「神之眼」，导引元素之力。"
-    )
-    vec1 = te.encode_single("你好")
-    print("单个向量维度：", len(vec1))
-    print("单个向量前10位：", vec1[:10])
-
-    vecs = te.encode_batch([test_chunk])
-    print("批量向量数量：", len(vecs))
-    print("批量向量第一条前10位：", vecs[0][:10])

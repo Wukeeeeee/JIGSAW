@@ -92,7 +92,20 @@
         if (res && res.image) {
           const st = Store.get();
           if (!st.settings) st.settings = {};
-          st.settings.image = { ...st.settings.image, ...res.image };
+          const local = st.settings.image || {};
+          const merged = { ...local, ...res.image };
+          // R7：后端脱敏返回空 apiKey → 保留本地已有真 Key，避免同步洗掉
+          if (!merged.apiKey && local.apiKey) merged.apiKey = local.apiKey;
+          if (Array.isArray(merged.models)) {
+            const localById = {};
+            (local.models || []).forEach(m => { if (m && m.id) localById[m.id] = m; });
+            merged.models.forEach(m => {
+              if (m && !m.apiKey && localById[m.id] && localById[m.id].apiKey) {
+                m.apiKey = localById[m.id].apiKey;
+              }
+            });
+          }
+          st.settings.image = merged;
           Store.notify("settings");
           Store.notify("image-model");
         }

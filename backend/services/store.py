@@ -20,6 +20,7 @@ _file_lock = threading.Lock()
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 MODELS_FILE = os.path.join(DATA_DIR, "models.json")
 CONVERSATIONS_FILE = os.path.join(DATA_DIR, "conversations.json")
+WORKFLOWS_FILE = os.path.join(DATA_DIR, "workflows.json")
 IMG_SETTINGS_FILE = os.path.join(DATA_DIR, "image_settings.json")
 
 
@@ -70,6 +71,24 @@ def _save_conversations(convs: List[Dict[str, Any]]) -> None:
     except Exception:
         pass
 
+#读取工作流（画布）：文件损坏/不存在时返回空表，前端会按会话懒重建
+def _load_workflows() -> Dict[str, Dict[str, Any]]:
+    try:
+        with open(WORKFLOWS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+#保存工作流（画布）：节点状态随节点一起落盘，刷新/重启后画布不丢
+def _save_workflows(wfs: Dict[str, Dict[str, Any]]) -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(WORKFLOWS_FILE, "w", encoding="utf-8") as f:
+            json.dump(wfs, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 # ---------------- 种子：Agent 模板 ----------------
 AGENT_TEMPLATES: List[Dict[str, Any]] = [
     {"id": "research", "name": "研究 Agent", "desc": "检索资料、收集证据", "icon": "search"},
@@ -106,7 +125,8 @@ class Store:
 
     def __init__(self) -> None:
         self.conversations=_load_conversations()
-        self.workflows: Dict[str, Dict[str, Any]] = {k: _deep(v) for k, v in SEED_WORKFLOWS.items()}
+        # 工作流（画布）：从 workflows.json 读入，持久化（此前仅内存，刷新即丢）
+        self.workflows: Dict[str, Dict[str, Any]] = _load_workflows()
         # 自定义模型：从文件读入（文件不存在则空）
         self.custom_models: List[Dict[str, Any]] = _load_models()
         self.settings: Dict[str, Any] = {
@@ -148,12 +168,25 @@ class Store:
         return list(self.workflows.values())
 
     def save_workflow(self, wf_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """upsert：不存在则创建（conversationId 由 wf-"前缀推导），merge 后落盘。"""
         wf = self.workflows.setdefault(wf_id, {"id": wf_id, "conversationId": wf_id[3:],
                                                "nodes": [], "edges": []})
         for key in ("nodes", "edges"):
             if key in payload:
                 wf[key] = payload[key]
+        for key in ("name",):
+            if key in payload:
+                wf[key] = payload[key]
+        with _file_lock:
+            _save_workflows(self.workflows)
         return wf
+
+    def delete_workflow(self, wf_id: str) -> bool:
+        existed = self.workflows.pop(wf_id, None) is not None
+        if existed:
+            with _file_lock:
+                _save_workflows(self.workflows)
+        return existed
 
     def add_message(self, conv_id: str, msg: Dict[str, Any]) -> None:
         conv = self.get_conversation(conv_id)

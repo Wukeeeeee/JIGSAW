@@ -21,8 +21,15 @@ class VectorStore:
         q=np.array(query_vector)
         scores=[]
         for idx,vec in enumerate(self.vectors):
+            """
+            计算余弦相似度
+            """
             sim=np.dot(q,vec)
+            """
+            与索引相互匹配
+            """
             scores.append((self.chunks[idx],sim))
+
 
         scores.sort(key=lambda x:x[1],reverse=True)
         return scores[:top_k]

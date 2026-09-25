@@ -38,8 +38,18 @@ def _key(m: dict) -> tuple:
 
 @router.get("")
 def list_models():
-    """只返回用户自定义模型（内置模型不对外展示）。"""
-    return {"models": store.custom_models}
+    """只返回用户自定义模型（内置模型不对外展示）。
+
+    R7：apiKey 不出后端 —— 一律脱敏为空串并附 hasKey 标记；
+    编辑模型时 apiKey 留空 = 保留原密钥（见 PUT）。
+    """
+    out = []
+    for m in store.custom_models:
+        x = dict(m)
+        x["hasKey"] = bool(x.get("apiKey"))
+        x["apiKey"] = ""
+        out.append(x)
+    return {"models": out}
 
 
 @router.post("/custom", response_model=CustomModelOut)
@@ -70,6 +80,9 @@ def update_custom_model(model_id: str, m: CustomModelIn):
             # 改名/改地址后不能和另一条记录撞车（撞的是自己除外）
             if any(o is not x and _key(o) == _key(data) for o in store.custom_models):
                 raise HTTPException(status_code=409, detail="已存在相同接口地址 + 模型 ID 的模型")
+            # R7：密钥不出后端（GET 返回脱敏空串），编辑时 apiKey 留空 = 保留原密钥
+            if not (data.get("apiKey") or "").strip():
+                data["apiKey"] = x.get("apiKey", "")
             x.update(data)
             store.save_models()
             return {"ok": True, "model": x}

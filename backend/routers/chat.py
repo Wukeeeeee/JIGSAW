@@ -12,11 +12,23 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     conversation_id: str
     message: str
-    # 前端设置 → 模型 里选的自定义模型信息（可选，没有就用后端默认）
+    # 后端模型库里的模型 id（R7：推荐方式，密钥由后端解析，不再经过前端请求）
+    model_id: Optional[str] = None
+    # 兼容旧前端：直接带完整模型配置
     # 结构：{"model": "gpt-4o", "baseUrl": "https://api.openai.com/v1", "apiKey": "sk-..."}
     model: Optional[dict] = None
     # 前端 设置 → 模型 → 采样温度（可选，没有就用后端默认 0.9）
     temperature: Optional[float] = None
+
+
+def _resolve_model_config(model_id: str | None, model: dict | None) -> dict | None:
+    """模型配置解析：优先按 model_id 从后端模型库取（密钥不出后端），
+    库里找不到或未配置时回退到请求自带配置（兼容旧前端）。"""
+    if model_id:
+        m = next((x for x in store.custom_models if x.get("id") == model_id), None)
+        if m and m.get("apiKey") and m.get("baseUrl"):
+            return {"model": m.get("modelId"), "baseUrl": m.get("baseUrl"), "apiKey": m.get("apiKey")}
+    return model
 
 
 @router.post("/messages")
@@ -41,7 +53,9 @@ def send_message(req: ChatRequest):
     store.save_conversations()
 
     # ② 创建异步任务，立即返回 task_id；后台 Worker 会调用 chat_service.reply()
-    task = task_service.create_task(req.conversation_id, req.message, req.model, req.temperature)
+    task = task_service.create_task(req.conversation_id, req.message,
+                                    _resolve_model_config(req.model_id, req.model),
+                                    req.temperature)
     return {
         "task_id": task["task_id"],
         "conversation_id": req.conversation_id,
@@ -108,6 +122,7 @@ def get_messages(conversation_id: str):
 
 class UpdateMessagesIn(BaseModel):
     messages: list[dict]
+    mode: Optional[str] = None   # 会话模式："workflow" = 画布编排会话（发送消息即执行画布）；缺省 = 普通 Agent 对话
 
 
 @router.put("/conversations/{conversation_id}/messages")
@@ -126,6 +141,9 @@ def update_messages(conversation_id: str, payload: UpdateMessagesIn):
         store.conversations.append(conv)
     conv["messages"] = payload.messages
     conv["workflowExecuted"] = True
+    # 会话模式持久化：工作流会话刷新后仍从画布链路执行，普通会话走后端 Agent 主链路
+    if payload.mode:
+        conv["mode"] = payload.mode
     store.save_conversations()
     return {"ok": True}
 

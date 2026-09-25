@@ -29,6 +29,8 @@
       // 如果输入了内容，按回车或点击直接自动规划生成完整的多智能体工作流！
       const title = text ? text.slice(0, 48) : "未命名工作流";
       const conv = JIGSAW.ChatService.create({ title, text: "" });
+      // 显式工作流会话标记：此后该会话发消息一律走画布链路（chat-service 按 mode 路由）
+      conv.mode = "workflow";
       const wf = JIGSAW.WorkflowService.getForConversation(conv.id);
       if (text && wf) {
         const startNode = wf.nodes && wf.nodes.find(n => n.agentType === "start");
@@ -47,6 +49,13 @@
         } catch (err) {
           console.warn("主页直接生成工作流异常，进入画布手动编排:", err);
         }
+      }
+      // 立即把 mode 持久化到后端：规划完就刷新页面也不会退化为普通对话会话
+      if (JIGSAW.Http && JIGSAW.Http.isRemote()) {
+        JIGSAW.Http.request("/api/chat/conversations/" + encodeURIComponent(conv.id) + "/messages", {
+          method: "PUT",
+          body: { messages: conv.messages || [], mode: "workflow" }
+        }).catch(() => {});
       }
       JIGSAW.Router.navigate("/chat/" + conv.id + "/workflow");
     }

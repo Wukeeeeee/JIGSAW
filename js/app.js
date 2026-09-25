@@ -51,6 +51,8 @@
 
     // 从后端拉回会话列表（持久化：刷新页面后历史记录还在）
     JIGSAW.ChatService.loadRemote();
+    // 从后端拉回工作流画布（持久化：刷新页面后画布与节点状态还在）
+    JIGSAW.WorkflowService.loadRemote();
   }
 
   /* ---------- auto-connect：启动时自动探测后端，连上就切到后端模式 ---------- */
@@ -62,6 +64,7 @@
         JIGSAW.SettingsService.update("api", { mode: "remote", connected: true });
         await JIGSAW.ToolService.load();          // 拉工具列表（工具广场 / 气泡标签用）
         JIGSAW.ChatService.loadRemote();          // 拉会话历史
+        JIGSAW.WorkflowService.loadRemote();      // 拉工作流画布
         JIGSAW.ModelService.syncFromServer();     // 拉模型配置
         if (JIGSAW.ImageService) JIGSAW.ImageService.syncFromServer(); // 拉生图模型配置
       }

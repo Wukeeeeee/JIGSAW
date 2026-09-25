@@ -75,13 +75,8 @@
      */
     chat(conversationId, message, model) {
       const body = { conversation_id: conversationId, message };
-      if (model && model.model) {
-        body.model = {
-          model: model.model,          // 模型名，如 "gpt-4o"
-          baseUrl: model.baseUrl || "", // OpenAI 兼容接口地址
-          apiKey: model.apiKey || ""    // 密钥
-        };
-      }
+      // R7：只传 model_id，密钥由后端模型库解析 —— Key 不再随对话请求经过前端
+      if (model && model.id) body.model_id = model.id;
       // 采样温度：来自 设置 → 模型 → 采样温度，随消息一起发给后端
       const temp = Store.get().settings.model.temperature;
       if (typeof temp === "number") body.temperature = temp;
@@ -107,6 +102,39 @@
     cancelTask(taskId) {
       return request("/api/chat/tasks/" + encodeURIComponent(taskId) + "/cancel", {
         method: "POST", body: {}
+      });
+    },
+
+    /** POST /api/workflows/nodes/run → 创建工作流节点执行任务（R6：节点"大脑"在后端跑）
+     *  模型只传 model_id，Key 由后端从模型库解析，不再经过浏览器执行链路。 */
+    runNodeTask(convId, node, modelId) {
+      return request("/api/workflows/nodes/run", {
+        method: "POST",
+        timeout: 15000,
+        body: {
+          conversation_id: convId,
+          node: {
+            id: node.id,
+            name: node.name,
+            description: node.description || "",
+            systemPrompt: node.systemPrompt || "",
+            tools: Array.isArray(node.tools) ? node.tools : [],
+            input: node.input || "",
+            maxToolCalls: node.maxToolCalls || null,
+            suppressAskUser: !!node.suppressAskUser
+          },
+          model_id: modelId || ""
+        }
+      });
+    },
+
+    /** POST /api/workflows/plan → Captain 规划：任务需求 → 多智能体 DAG（R6：后端跑规划，
+     *  只传 model_id，Key 不进浏览器；失败时前端降级到本地启发式规划） */
+    planWorkflow(userPrompt, modelId) {
+      return request("/api/workflows/plan", {
+        method: "POST",
+        timeout: 120000,   // 规划可能多候选级联，最长约 90s/模型
+        body: { user_prompt: userPrompt, model_id: modelId || "", temperature: 0.1 }
       });
     },
 
@@ -181,6 +209,16 @@
     /** POST /api/stats/reset → 重置统计（次数清零，起始时间改为当前时刻） */
     resetStats() {
       return request("/api/stats/reset", { method: "POST", body: {} });
+    },
+
+    /** GET /api/rules → 用户全局规则（rules.md 内容） */
+    getRules() {
+      return request("/api/rules");
+    },
+
+    /** PUT /api/rules → 保存用户全局规则（保存即生效，注入每次对话的 system prompt） */
+    saveRules(content) {
+      return request("/api/rules", { method: "PUT", body: { content }, timeout: 15000 });
     },
 
     /* ============ 知识库（本地文件系统 CRUD） ============ */

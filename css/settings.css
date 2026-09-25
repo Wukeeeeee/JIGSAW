@@ -30,7 +30,15 @@
 .settings-inner { max-width: 620px; display: flex; flex-direction: column; gap: var(--sp-8); }
 
 .settings-section-title { font-family: var(--font-headline); font-size: 16px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: var(--sp-4); }
-.settings-section-sub { font-size: 12px; color: var(--text-3); margin-top: -var(--sp-3); margin-bottom: var(--sp-4); }
+.settings-section-sub { font-size: 12px; color: var(--text-3); margin-top: calc(-1 * var(--sp-3)); margin-bottom: var(--sp-4); }
+
+/* 常规 → 全局规则：多行编辑器（基于 .input，覆盖其单行高度约束） */
+.settings-rules-editor {
+  height: auto !important;
+  min-height: 150px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
 
 .settings-card {
   border: 1px solid var(--line-1); background: var(--bg-surface);

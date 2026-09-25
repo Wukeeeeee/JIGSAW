@@ -89,9 +89,11 @@ html[data-density="comfortable"] {
   --sp-5: 26px; --sp-6: 32px; --sp-8: 40px;  --sp-10: 48px; --sp-12: 56px;
 }
 
-/* ---- font size (Appearance → 字号)：根字号影响全部继承文字 ---- */
-html[data-font-size="small"] { font-size: 13px; }
-html[data-font-size="large"] { font-size: 15px; }
+/* ---- font size (Appearance → 字号) ----
+   全站布局与文字均为 px（无 rem），改根字号不会有任何效果；
+   用 zoom 实现真实的整体缩放（Chromium/Electron 原生支持）。 */
+html[data-font-size="small"] { zoom: 0.9; }
+html[data-font-size="large"] { zoom: 1.1; }
 
 /* ---- light theme (Appearance → Theme) ---- */
 html[data-theme="light"] {

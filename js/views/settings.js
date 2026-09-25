@@ -63,6 +63,22 @@
           textInput(s.general.workspaceName, v => JIGSAW.SettingsService.update("general", { workspaceName: v }))),
         row("密度", "控制界面元素之间的间距。",
           selectCtrl([["compact", "紧凑"], ["comfortable", "宽松"]], s.general.density, v => JIGSAW.SettingsService.update("general", { density: v })))
+      ),
+      // 全局规则（rules.md）：自动注入每次对话与工作流节点的 system prompt。
+      // 结构与其它分区一致：标题/说明在卡片外，控件在卡片内。
+      h("div", { class: "settings-section-title", style: { marginTop: "var(--sp-6)" } }, "全局规则（Rules）"),
+      h("div", { class: "settings-section-sub" },
+        "写给 AI 的持久偏好，每次对话与工作流节点自动注入系统提示词（保存即生效，无需重启）。落盘 backend/data/rules.md。"),
+      h("div", { class: "settings-card" },
+        h("div", { style: { padding: "var(--sp-4)" } },
+          h("textarea", {
+            class: "input settings-rules-editor", "data-rules-editor": "1", rows: "7",
+            placeholder: "例如：\n- 始终使用简体中文回复\n- 代码注释用中文\n- 项目用 uv 管理依赖，不要用 pip",
+            style: { height: "auto", minHeight: "150px", padding: "var(--sp-3)", lineHeight: "1.6", resize: "vertical" }
+          }),
+          h("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: "var(--sp-3)" } },
+            h("button", { class: "btn btn-sm btn-primary", "data-save-rules": "1", type: "button" }, "保存规则"))
+        )
       )
     ];
   }
@@ -174,7 +190,7 @@
     const imgSettings = s.image || {};
     // 严格按用户实际已配置的模型展示：过滤掉没有密钥或无效的项，有几个就展示几个，绝不预设空模型
     let models = (Array.isArray(imgSettings.models) ? imgSettings.models : [])
-      .filter(m => m && m.modelId && m.apiKey && m.apiKey.trim());
+      .filter(m => m && m.modelId && (m.apiKey && m.apiKey.trim() || m.hasKey));   // R7：脱敏数据 hasKey=true 即有效
 
     // 若无 models 列表，尝试从旧单模型格式迁移
     if (!models.length) {
@@ -356,7 +372,7 @@
     els("[data-test-im]", imList).forEach(b => b.addEventListener("click", async () => {
       const m = models.find(x => x.id === b.dataset.testIm);
       if (!m) return;
-      if (!m.apiKey) {
+      if (!m.apiKey && !m.hasKey) {
         JIGSAW.Toast.show(`请先为「${m.name}」填写 API Key 密钥`);
         return;
       }
@@ -625,6 +641,30 @@
     const inner = h("div", { class: "settings-inner" });
     RENDERERS[current](s).forEach(n => inner.appendChild(n));
     contentEl.appendChild(inner);
+
+    // 全局规则（Rules）：拉取内容填充编辑器 + 保存按钮（常规 tab）
+    const rulesEditor = el("[data-rules-editor]", contentEl);
+    if (rulesEditor) {
+      if (JIGSAW.Http.isRemote()) {
+        JIGSAW.Http.getRules().then(r => {
+          if (rulesEditor.isConnected && !rulesEditor.value) rulesEditor.value = (r && r.content) || "";
+        }).catch(() => {});
+      }
+      const saveBtn = el("[data-save-rules]", contentEl);
+      if (saveBtn) saveBtn.addEventListener("click", async () => {
+        if (!JIGSAW.Http.isRemote()) { JIGSAW.Toast.show("全局规则需要后端模式（设置 → API → 后端 API）"); return; }
+        saveBtn.disabled = true;
+        try {
+          const r = await JIGSAW.Http.saveRules(rulesEditor.value);
+          if (r && r.ok) JIGSAW.Toast.show(`全局规则已保存（${r.chars} 字），立即生效`);
+          else JIGSAW.Toast.show("保存失败：" + ((r && r.error) || "未知原因"));
+        } catch (e) {
+          JIGSAW.Toast.show("保存失败：" + (e.message || e));
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+    }
 
     // 自定义模型删除
     els('[data-del-cm]', contentEl).forEach(b => b.addEventListener("click", async () => {

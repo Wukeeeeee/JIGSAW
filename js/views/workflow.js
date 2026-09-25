@@ -1293,7 +1293,7 @@
     const textarea = h("textarea", {
       class: "input tall",
       rows: "4",
-      placeholder: "请输入任务需求或调研目标（例如：全面调研华为智能汽车业务的市场规模、技术壁垒与竞争格局，生成深度研报）",
+      placeholder: "请输入任务需求或调研目标",
       style: { width: "100%", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }
     }, initVal);
 

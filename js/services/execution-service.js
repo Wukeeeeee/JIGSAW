@@ -13,10 +13,97 @@
 
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // R6 第一步：节点"大脑"在后端跑（工具循环 / 权限门控 / AskUser 挂起 / 可取消），
+  // 浏览器不再直连 LLM —— API Key 不进入节点执行链路，只传 model_id。
+  function pollNodeTask(taskId) {
+    return new Promise((resolve, reject) => {
+      const timer = setInterval(() => {
+        JIGSAW.Http.getTask(taskId).then(t => {
+          if (!t) { clearInterval(timer); reject(new Error("任务不存在（后端可能重启过）")); return; }
+          if (t.status === "cancelled") { clearInterval(timer); reject(new Error("节点已被用户终止")); return; }
+          if (t.status === "failed") { clearInterval(timer); reject(new Error(t.error || "节点执行失败")); return; }
+          if (t.status === "done") { clearInterval(timer); resolve(t.reply || "（节点完成，但无文字输出）"); return; }
+          // AskUser / 风险确认：与聊天轮询共用同一套防重弹窗机制
+          const qSeq = (t.pendingQuestionSeq != null) ? t.pendingQuestionSeq : String(t.pendingQuestion);
+          const busyElsewhere = JIGSAW.AskModalBusy && JIGSAW.AskModalBusy !== taskId;
+          if (t.pendingQuestion && !busyElsewhere && !JIGSAW.AskModalBusy
+              && JIGSAW._askShownSeq[taskId] !== qSeq) {
+            JIGSAW._askShownSeq[taskId] = qSeq;
+            JIGSAW.AskModalBusy = taskId;
+            JIGSAW.AskModal.show(t.pendingQuestion, taskId, {
+              risk: !!t.pendingRisk,
+              options: t.pendingOptions || []
+            })
+              .then(res => {
+                if (JIGSAW.AskModalBusy === taskId) JIGSAW.AskModalBusy = null;
+                if (res && res.answer !== null && res.answer !== undefined) {
+                  JIGSAW.Http.answerTask(taskId, res.answer, res.noMore).catch(() => {});
+                } else if (res === null) {
+                  JIGSAW.Http.answerTask(taskId, "").catch(() => {});
+                }
+              })
+              .catch(() => { if (JIGSAW.AskModalBusy === taskId) JIGSAW.AskModalBusy = null; });
+          }
+        }).catch(err => {
+          clearInterval(timer);
+          reject(new Error("轮询节点任务失败：" + (err.message || err)));
+        });
+      }, 1500);
+    });
+  }
+
+  // 后端节点执行：解析模型 id → 创建节点任务 → 轮询取回输出（agent 节点与条件判定共用）
+  async function runBackendNode(node, wf) {
+    let modelId = node.modelId || "";
+    if (!modelId && JIGSAW.ModelService) {
+      const active = JIGSAW.ModelService.getActive();
+      if (active) modelId = active.id;
+    }
+    if (!modelId) {
+      throw new Error("未配置可用对话模型（请到 设置 → 模型 添加并填写密钥）");
+    }
+
+    const convId = (wf && (wf.conversationId || String(wf.id || "").replace(/^wf-/, ""))) || "";
+    let taskId;
+    try {
+      const res = await JIGSAW.Http.runNodeTask(convId, node, modelId);
+      taskId = res && res.task_id;
+    } catch (e) {
+      throw new Error("创建节点任务失败：" + (e.message || e));
+    }
+    if (!taskId) throw new Error("后端未返回节点任务编号");
+    return await pollNodeTask(taskId);
+  }
+
   async function callModelForNode(node, wf) {
+    // 条件节点：后端 LLM 真判定（只回 true/false），不再本地预设判定。
+    // 判定失败如实抛错 → 节点 failed → 下游分支熔断（与普通节点失败一致）。
+    if (node.agentType === "condition_if") {
+      const question = (node.description || node.name || "").trim() || "上游成果是否满足继续条件？";
+      const judgeNode = Object.assign({}, node, {
+        name: "条件判定 · " + (node.name || "分支"),
+        systemPrompt:
+          "你是多智能体工作流中的条件判定器。请基于上游各节点流转输入，对下面的判定问题给出结论。\n" +
+          "判定问题：" + question +
+          "\n【输出硬性要求】只输出小写 true 或 false，禁止输出任何其他文字、解释或标点。",
+        tools: [],
+        maxToolCalls: 1,
+        suppressAskUser: true
+      });
+      const reply = await runBackendNode(judgeNode, wf);
+      const isTrue = /\btrue\b/i.test(reply);
+      const isFalse = /\bfalse\b/i.test(reply);
+      if (isTrue === isFalse) {
+        throw new Error("条件判定输出无法解析（应为 true/false）：" + String(reply).slice(0, 80));
+      }
+      node.conditionOutcome = isTrue ? "true" : "false";
+      return node.conditionOutcome === "true"
+        ? `【条件判定：满足 (True)】${question} —— 校验通过，数据流已放行至 True 主干分支。`
+        : `【条件判定：未满足 (False)】${question} —— 触发分流至 False 备选分支。`;
+    }
+
     if (
       node.category === "logic" ||
-      node.agentType === "condition_if" ||
       node.agentType === "loop_ctrl" ||
       node.agentType === "try_catch" ||
       node.agentType === "start" ||
@@ -29,255 +116,8 @@
       return generateSmartSemanticOutput(node, wf);
     }
 
-    // 1. 获取该节点指定的模型，或者当前系统配置的真实自定义模型（过滤纯生图模型如 Agnes/FLUX 等）
-    function isChatModel(m) {
-      if (!m || !m.apiKey || !m.baseUrl) return false;
-      const mid = (m.modelId || m.model || m.name || "").toLowerCase();
-      const url = (m.baseUrl || "").toLowerCase();
-      return !mid.includes("image") && !mid.includes("flux") && !mid.includes("dall-e") && !url.includes("agnes-ai");
-    }
-
-    let model = null;
-    if (JIGSAW.ModelService) {
-      if (node.modelId) {
-        const nm = JIGSAW.ModelService.byId(node.modelId);
-        if (isChatModel(nm)) model = nm;
-      }
-      if (!model) {
-        const active = JIGSAW.ModelService.getActive();
-        if (isChatModel(active)) model = active;
-      }
-      if (!model) {
-        const list = JIGSAW.ModelService.list() || [];
-        model = list.find(m => isChatModel(m));
-      }
-    }
-
-    if (!model || !model.apiKey) {
-      const customs = (Store.get().settings && Store.get().settings.model && Store.get().settings.model.custom) || [];
-      const valid = customs.find(c => c.apiKey && c.baseUrl && isChatModel(c));
-      if (valid) model = valid;
-    }
-
-    // 2. 如果存在真实配置的模型（有 baseUrl 与 apiKey），直接进行 API 真实调用
-    if (model && model.apiKey && model.baseUrl) {
-      try {
-        let endpoint = model.baseUrl.trim().replace(/\/+$/, "");
-        if (!endpoint.endsWith("/chat/completions")) {
-          endpoint = endpoint.endsWith("/v1") ? endpoint + "/chat/completions" : endpoint + "/chat/completions";
-        }
-
-        // 模型名称兼容：若写了 deepseek-v4-flash 或其他自定义别名，DeepSeek 官方接口规范化为 deepseek-chat
-        let modelName = model.model || model.modelId || "deepseek-chat";
-        if (model.baseUrl.includes("deepseek.com")) {
-          if (!modelName.toLowerCase().includes("reasoner")) {
-            modelName = "deepseek-chat";
-          } else {
-            modelName = "deepseek-reasoner";
-          }
-        }
-
-        // 100% 由 AI 规划决策：严禁用任何代码正则/模糊扫描覆盖 AI 的工具决策
-        const hasImageTool = Array.isArray(node.tools) && node.tools.includes("generate_image");
-        const hasWebSearch = Array.isArray(node.tools) && (node.tools.includes("websearch") || node.tools.includes("fetch_url"));
-        const hasKnowledgeSearch = Array.isArray(node.tools) && node.tools.includes("knowledge_search");
-        const hasKnowledgeWrite = Array.isArray(node.tools) && node.tools.includes("knowledge_write");
-        const isVisualNode = hasImageTool;
-
-        // 1. 若配置了网页搜索 (websearch)，调用后端工具先抓取实时情报，注入节点上下文
-        let liveSearchSummary = "";
-        if (hasWebSearch && JIGSAW.Http) {
-          try {
-            const queryTarget = (node.name + " " + (node.input ? String(node.input).slice(0, 100) : "")).replace(/[·•—\-_\[\]【】()（）]/g, " ").trim();
-            if (queryTarget) {
-              const wsResp = await JIGSAW.Http.request("/api/tools/execute", {
-                method: "POST",
-                body: { name: "websearch", args: { query: queryTarget.slice(0, 80) } },
-                timeout: 15000
-              });
-              if (wsResp && wsResp.ok && wsResp.result && String(wsResp.result).trim()) {
-                liveSearchSummary = `\n\n【联网检索一手事实数据 (websearch 实时抓取)】：\n${String(wsResp.result).slice(0, 2000)}\n（请严格依据上述客观最新事实与数据进行论证与展开）`;
-              }
-            }
-          } catch (se) {
-            console.warn("工作流节点执行 websearch 失败：", se);
-          }
-        }
-
-        // 2. 若配置了知识库检索 (knowledge_search)
-        let knowledgeSearchSummary = "";
-        if (hasKnowledgeSearch && JIGSAW.Http) {
-          try {
-            const ksResp = await JIGSAW.Http.request("/api/tools/execute", {
-              method: "POST",
-              body: { name: "knowledge_search", args: { query: node.name } },
-              timeout: 10000
-            });
-            if (ksResp && ksResp.ok && ksResp.result && String(ksResp.result).trim()) {
-              knowledgeSearchSummary = `\n\n【本地知识库收录参考 (knowledge_search)】：\n${String(ksResp.result).slice(0, 1800)}`;
-            }
-          } catch (ke) {
-            console.warn("工作流节点检索知识库失败：", ke);
-          }
-        }
-
-        // 获取实时基准时钟：每次执行节点任务与调用工具时均强制透传精准时间
-        const now = new Date();
-        const curDateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
-        const curTimeStr = `${curDateStr} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-        const timeContextPrompt = `\n【当前系统真实基准时间】：${curTimeStr}（基准年份：${now.getFullYear()}年。涉及任何时效性分析、时序比对或测算时必须以此真实时间为基准）。\n`;
-
-        // 构建隔离、纯净的节点专属 System Prompt，彻底杜绝寒暄闲聊与内部说明
-        const systemPrompt = ((node.systemPrompt && node.systemPrompt.trim())
-          ? `${node.systemPrompt.trim()}\n\n【核心输出与防幻化准则】：你作为多智能体工作流中的独立专业节点，请直接输出本次任务的核心成果。严禁输出任何客套寒暄、自我介绍（如“我是xxx”、“好的，下面由我...”等）；严格忠实于上游事实，严禁凭空捏造无关的商业口号（Slogan）或空洞套话。`
-          : `你是一个专注于【${node.name}】专业任务的智能体。\n请直接输出高质量、结构化、详尽的专业成果。\n严格禁止输出任何问候语、自我介绍或对话闲聊，直接呈现交付内容。`) + timeContextPrompt;
-
-        let userContent = `【当前任务节点】：${node.name}\n` +
-          (node.description ? `【节点目标说明】：${node.description}\n` : "") +
-          timeContextPrompt +
-          (node.input ? `【上游各节点流转输入】：\n${node.input}\n\n` : "") +
-          liveSearchSummary + knowledgeSearchSummary;
-
-        if (isVisualNode) {
-          userContent += `请深入结合上游所有输入素材与事实，执行【画面构思与 AI 绘图创作】任务：
-1. 【画面意境与视觉要素提炼】：基于上游事实提取画面的视觉核心主体、背景环境、构图透视、光影氛围与艺术风格（如写实摄影、概念渲染、科技未来感、数字插画等）；
-2. 【严防幻化与虚构套话】：严禁自作主张编造未经证实的商业宣传口号（Slogan）、大标题排版或空洞广告语，100% 紧扣上游真实内容与视觉本身；
-3. 【生成高精度绘图提示词 Prompt】：输出一段详尽、用于驱动文生图模型的高品质英文 Prompt（详细刻画主体细节、材质、灯光、镜头及渲染引擎质感）；
-4. 【尝试执行画图】：输出内容中必须包含明确的英文生图提示词（使用 \`\`\`text 代码块或 Prompt: 标注），系统将自动调用生图工具完成画面绘制！`;
-        } else {
-          userContent += `请基于上述目标与上游交付内容，执行本节点专业任务，输出真实、客观、详细、结构化的高质量成果。【防幻化准则】：严密依据事实与上游数据展开，严禁无依据的虚构与主观臆测。`;
-        }
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000);
-
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${model.apiKey}`
-          },
-          body: JSON.stringify({
-            model: modelName,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userContent }
-            ],
-            temperature: 0.7
-          }),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (res.ok) {
-          const json = await res.json();
-          let reply = json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content;
-          if (reply && reply.trim()) {
-            reply = reply.trim();
-
-            // 仅在 AI 明确为该节点配置了 generate_image 工具时，才执行生图
-            if (hasImageTool) {
-              try {
-                let promptToDraw = "";
-                // 1. 检查代码块中的提示词
-                const codeBlocks = reply.matchAll(/```(?:text|prompt|en|markdown)?\s*([\s\S]*?)```/gi);
-                for (const m of codeBlocks) {
-                  const candidate = (m[1] || "").trim();
-                  if (candidate.length >= 10 && !/^(import |def |function |const |let |<div)/i.test(candidate)) {
-                    promptToDraw = candidate;
-                    break;
-                  }
-                }
-                // 2. 检查单行提示词标签
-                if (!promptToDraw) {
-                  const lineMatch = reply.match(/(?:Image\s*Prompt|生图提示词|绘图提示词|Prompt|提示词|生图指令|画面提示词)[：:\s]+([^\n]+)/i);
-                  if (lineMatch && lineMatch[1] && lineMatch[1].trim().length >= 10) {
-                    promptToDraw = lineMatch[1].trim();
-                  }
-                }
-                // 3. 检查是否有英文段落（FLUX/Midjourney 风格）
-                if (!promptToDraw) {
-                  const enMatch = reply.match(/[A-Z][a-zA-Z0-9\s,._\-'":;()]{30,}/);
-                  if (enMatch && enMatch[0]) {
-                    promptToDraw = enMatch[0].trim();
-                  }
-                }
-                // 4. 兜底：若未提取到显式 prompt，根据节点名称提炼
-                if (!promptToDraw && isVisualNode) {
-                  promptToDraw = `${node.name}, high quality, detailed masterpiece, cinematic lighting, 8k resolution`;
-                }
-
-                if (promptToDraw) {
-                  let activeImgModel = null;
-                  if (JIGSAW.ImageService) {
-                    activeImgModel = node.imageModelId ? JIGSAW.ImageService.get(node.imageModelId) : JIGSAW.ImageService.getActive();
-                  }
-                  // 生图需要 10~25 秒计算，显式传入 90 秒超时，防止被通用网络请求的 12s 超时截断
-                  const toolResp = await JIGSAW.Http.request("/api/tools/execute", {
-                    method: "POST",
-                    body: {
-                      name: "generate_image",
-                      args: {
-                        prompt: promptToDraw,
-                        model: (activeImgModel && activeImgModel.modelId) || undefined,
-                        aspect_ratio: (activeImgModel && activeImgModel.aspectRatio) || "16:9"
-                      }
-                    },
-                    timeout: 90000
-                  });
-                  if (toolResp && toolResp.ok && toolResp.result) {
-                    // 将生成的图像大图置顶在最上方作为首要视觉交付物，并清理底部的占位说明与未完成空标题
-                    let cleanCommentary = reply
-                      .replace(/##\s*三[、.][\s\S]*?(?=##|$)/gi, "")
-                      .replace(/(?:系统将自动调用|即将调用|正在调用)[^\n]*/gi, "")
-                      .replace(/###?\s*(?:生图执行|执行生图|调用工具|自动调用|工具调用|生图任务)[^\n]*(?:\n\s*)*$/gi, "")
-                      .trim();
-                    reply = `### 🖼️ AI 绘图创作完成（高清成品）：\n\n${toolResp.result}\n\n---\n${cleanCommentary}`.trim();
-                  } else {
-                    const errMsg = (toolResp && (toolResp.error || toolResp.result)) || "生图服务未返回图片";
-                    reply += `\n\n---\n> ⚠️ **生图提示**：自动生成图片未完成（${errMsg}）。请在「设置 → 模型」中检查 API Key 与生图模型状态。`;
-                  }
-                }
-              } catch (imgErr) {
-                console.warn("工作流自动触发生图工具失败：", imgErr);
-                reply += `\n\n---\n> ⚠️ **生图异常提示**：未能成功调用生图模型（${imgErr.message || imgErr}）。`;
-              }
-            }
-
-            // 若配置了知识库写入工具 (knowledge_write)，异步沉淀至本地知识库
-            if (hasKnowledgeWrite && JIGSAW.Http && JIGSAW.Http.isRemote()) {
-              try {
-                const docTitle = `${node.name.replace(/·.*$/, "").trim()}·成果研报`;
-                JIGSAW.Http.request("/api/tools/execute", {
-                  method: "POST",
-                  body: {
-                    name: "knowledge_write",
-                    args: {
-                      title: docTitle,
-                      content: reply,
-                      folder: "工作流成果"
-                    }
-                  },
-                  timeout: 10000
-                }).catch(() => {});
-              } catch (_) {}
-            }
-
-            // 清理末尾可能泄露的内部工具调用 JSON 块
-            reply = reply.replace(/```(?:json)?\s*\{\s*"(?:action|tool|function)"\s*:\s*"(?:knowledge_write|write_knowledge)"[\s\S]*?\}\s*```/gi, "").trim();
-
-            return reply;
-          }
-        } else {
-          console.warn("模型接口返回状态异常：", res.status, await res.text());
-        }
-      } catch (e) {
-        console.warn("调用大模型异常，进入语义智能兜底：", e);
-      }
-    }
-
-    // 3. 兜底语义智能生成：根据节点名称、描述、提示词、上游输入提炼动态生成
-    return generateSmartSemanticOutput(node, wf);
+    // 普通 Agent 节点：真实任务（工具循环 / 权限门控 / AskUser / 可取消）
+    return await runBackendNode(node, wf);
   }
 
   function generateSmartSemanticOutput(node, wf) {
@@ -306,99 +146,13 @@
     if (node.agentType === "gate_or" || node.agentType === "or_gate") {
       return (node.input && node.input.trim()) ? node.input.trim() : "【或门同步完成】前置分支已激活，放行流转。";
     }
-
-    if (node.agentType === "gisCollect") {
-      return "【GIS 遥感数据摄取完成】已成功抓取目标区域 4 幅高分影像图层，几何校正与波段对齐完毕。";
-    }
-    if (node.agentType === "gisProcess") {
-      return "【GIS 空间计算完成】已提取 NDVI 植被指数与水体遥感特征，生成矢量斑块与 GeoTIFF 栅格。";
-    }
-    if (node.agentType === "analysis") {
-      return "【智能体综合研判完毕】海岸线突变演变趋势模型拟合完毕，生成风险评估结论矩阵。";
-    }
-    if (node.agentType === "gisMap") {
-      return "【专题地图渲染完成】已挂载分层矢量瓦片，输出交互式 GIS 地图专题图层与报告。";
+    if (node.agentType === "gate_not") {
+      return (node.input && node.input.trim()) ? node.input.trim() : "【非门】前置条件取反完成，数据流已放行。";
     }
 
-    const nodeTitle = node.name || "专项智能体";
-    const nodeDesc = node.description || "专项研究与数据处理任务";
-    const hasUpstream = !!(node.input && node.input.trim());
-
-    // 判断是否为收尾/综合决策总结节点
-    const isSummary = (node.id && node.id.includes("summary")) ||
-      /总结|对比|分析|汇总|研报|决策|综合/i.test(nodeTitle) ||
-      (hasUpstream && wf && wf.edges && !wf.edges.some(e => e.from === node.id));
-
-    if (isSummary) {
-      const isVisualTask = (node.tools && node.tools.includes("generate_image")) ||
-        /海报|宣传图|配图|视觉|插画|画图|绘图|生图|做图|出图|图片|图像|渲染图|概念图|效果图|壁纸|图表|image|draw|render/i.test(nodeTitle + " " + nodeDesc + " " + (node.systemPrompt || ""));
-
-      let upstreamSummary = "";
-      if (hasUpstream) {
-        // 从上游数据中提取各节点交卷的关键摘要
-        const blocks = node.input.split(/【上游节点\s*\[(.*?)\]\s*交付数据】：/g);
-        if (blocks.length > 1) {
-          upstreamSummary += `\n#### 🔍 上游各专业分支交付要点交叉汇聚：\n\n`;
-          for (let i = 1; i < blocks.length; i += 2) {
-            const upName = blocks[i];
-            const upContent = (blocks[i + 1] || "").trim().slice(0, 180).replace(/\n+/g, " ");
-            upstreamSummary += `- **【${upName}】**：${upContent}…\n`;
-          }
-        } else {
-          upstreamSummary += `\n> **上游数据流参考**：\n> ${node.input.slice(0, 300).replace(/\n+/g, "\n> ")}\n\n`;
-        }
-      }
-
-      if (isVisualTask) {
-        // 动态提取核心目标词
-        const cleanTitle = nodeTitle.replace(/·.*$/, "").replace(/视觉.*$/, "").replace(/文案.*$/, "").replace(/渲染.*$/, "").trim() || "画面视觉";
-        const topicNames = [];
-        const blocks = (node.input || "").split(/【上游节点\s*\[(.*?)\]\s*交付数据】：/g);
-        if (blocks.length > 1) {
-          for (let i = 1; i < blocks.length; i += 2) {
-            topicNames.push(blocks[i].replace(/·.*$/, "").trim());
-          }
-        }
-        const combinedElements = topicNames.length > 0 ? topicNames.join("、") : "核心特征要素";
-        const combinedEn = topicNames.length > 0 ? topicNames.join(", ") : "core thematic elements";
-
-        return `### 🎨【${nodeTitle}】画面视觉构思与 AI 绘图成果\n\n` +
-          `**核心目标**：${nodeDesc}\n\n` +
-          `---\n` +
-          upstreamSummary +
-          `\n#### 🖼️ 画面主体与艺术构图设计：\n` +
-          `1. **核心视觉主体**：聚焦于【${cleanTitle}】，细致刻画其核心外形轮廓、材质纹理与标志性细节；\n` +
-          `2. **环境透视与空间氛围**：深度融合上游提炼的【${combinedElements}】，构建具有景深感的空间背景，增强场景真实感；\n` +
-          `3. **光影与艺术表现**：采用电影级自然环境光照与高光阴影反差，形成鲜明的视觉层次与艺术质感；\n` +
-          `4. **色彩体系**：契合主题调性，冷暖色调自然过渡，突出主体的高辨识度。\n\n` +
-          `#### 🤖 AI 绘图提示词（Prompt）：\n` +
-          `\`\`\`text\n` +
-          `A masterfully composed visual of ${cleanTitle}, seamlessly featuring ${combinedEn}, cinematic lighting, photorealistic masterpiece, 8k resolution, detailed texture and atmosphere, octane render style --ar 16:9\n` +
-          `\`\`\`\n\n` +
-          `💡 **绘图说明**：已提炼可直接驱动文生图模型的高精 Prompt。当前节点配置生图服务时将自动调用 AI 生图工具并展示成品图。`;
-      }
-
-      return `### 📊【${nodeTitle}】综合研报与决策交付\n\n` +
-        `**核心使命**：${nodeDesc}\n\n` +
-        `---\n` +
-        upstreamSummary +
-        `\n#### 📈 综合多维研判与评估结论：\n` +
-        `1. **现状与协同价值**：经上游各智能体多方比对与深度调研，本课题在顶层架构、落地环境与技术可行性上均具备明确支撑。\n` +
-        `2. **关键突破方向**：针对任务核心焦点，需重点理顺各环节衔接标准，强化基础设施与制度政策的协同配套。\n` +
-        `3. **潜在风险把控**：需持续跟踪监管演进与产业周期变化，建立弹性的风险隔离与应急预案。\n\n` +
-        `**💡 最终建议与决策指引**：建议根据各细分维度的交付标准，按“试点验证 ➔ 标杆复制 ➔ 全面协同”的三阶段路径稳步推进。`;
-    }
-
-    // 普通专业智能体（Worker Agent）动态交付
-    const cleanTopic = nodeTitle.replace(/·.*$/, "").trim();
-    return `### 📑【${nodeTitle}】专项成果交付报告\n\n` +
-      `- **研究与任务定位**：${nodeDesc}\n` +
-      `- **核心事实与现状调研**：针对【${cleanTopic}】进行深入分析与核心要素归集，已完成关键数据结构化梳理。\n` +
-      `- **重点发现与支撑要素**：\n` +
-      `  1. 归集并提炼了【${cleanTopic}】的核心维度与关键事实；\n` +
-      `  2. 形成了可供下游分析、创意总成或决策使用的坚实依据；\n` +
-      `  3. 数据质量校验完毕，逻辑自洽，无关键遗漏。\n` +
-      `- **交付结论**：本专项模块执行完毕，核心成果已流转至下游节点。`;
+    // 【已移除伪语义生成兜底】非逻辑节点的输出只能来自真实模型调用：
+    // 模型未配置或调用失败 → 抛错 → 节点如实标 failed，绝不生成看似真实的假报告。
+    throw new Error(`节点【${node.name || node.id}】缺少真实模型输出（仅逻辑节点支持本地求值）`);
   }
 
   const ExecutionService = {
@@ -811,6 +565,7 @@
 
       if (!token.cancelled) {
         wf.executed = true;
+        WorkflowService.persist(wf.id);   // 执行结束（节点终态）落盘
         Store.notify("workflows");
 
         // 为对话界面生成多 Agent 的最终综合交付报告与回复
@@ -838,13 +593,13 @@
           asstMsg.thinkingText = `已由 ${successNodes.length} 个智能体协同完成`;
           Store.notify("messages");
 
-          // 同步持久化至后端会话存储
+          // 同步持久化至后端会话存储（mode 一并带上，刷新后仍识别为工作流会话）
           if (JIGSAW.Http && JIGSAW.Http.isRemote()) {
             const curConv = JIGSAW.ChatService && JIGSAW.ChatService.get(convId);
             if (curConv && curConv.messages) {
               JIGSAW.Http.request("/api/chat/conversations/" + encodeURIComponent(convId) + "/messages", {
                 method: "PUT",
-                body: { messages: curConv.messages }
+                body: { messages: curConv.messages, mode: curConv.mode || "workflow" }
               }).catch(() => {});
             }
           }
@@ -861,6 +616,7 @@
       wf.nodes.forEach(n => { if (n.status === "waiting" || n.status === "running") n.status = "failed"; });
       wf.edges.forEach(e => { e.activeFlow = false; });
       wf.running = false;
+      WorkflowService.persist(wf.id);     // 终止后的节点终态落盘
       Store.notify("workflows");
 
       const conv = JIGSAW.ChatService && JIGSAW.ChatService.get(convId);

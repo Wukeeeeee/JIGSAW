@@ -63,8 +63,14 @@ def set_worker_count(n: int) -> int:
 
 
 def create_task(conversation_id: str, message: str,
-                model: dict | None = None, temperature: float | None = None) -> dict:
-    """创建任务 → 立即返回任务信息（不等待处理）。"""
+                model: dict | None = None, temperature: float | None = None,
+                kind: str = "chat", payload: dict | None = None) -> dict:
+    """创建任务 → 立即返回任务信息（不等待处理）。
+
+    kind="chat"（默认）：普通对话，Worker 调 chat_service.reply(conversation_id, message, ...)
+    kind="node"：工作流节点执行，Worker 调 chat_service.run_node(payload 节点配置, ...)；
+                message 仅作队列面板展示用（节点名）。
+    """
     task_id = f"t-{uuid.uuid4().hex[:10]}"
     with _lock:
         TASKS[task_id] = {
@@ -73,6 +79,8 @@ def create_task(conversation_id: str, message: str,
             "message": message,
             "model": model,
             "temperature": temperature,
+            "kind": kind,             # chat / node
+            "payload": payload,       # kind=node 时的节点配置（name/systemPrompt/tools/input/...）
             "status": "pending",      # pending(排队) → running(处理中) → done / failed
             "queue_position": len(QUEUE) + 1,
             "activity": None,         # 实时进度文案，如 "正在调用 网页搜索（关岛签证）"
@@ -306,11 +314,18 @@ def _worker() -> None:
             message = task["message"]
             model = task["model"]
             temperature = task["temperature"]
+            kind = task.get("kind", "chat")
+            payload = task.get("payload")
 
         try:
             # 调 LLM（内部会循环调用工具，每调一个工具就 set_activity 一次）
             # 传 task_id：AskUser 工具靠它挂起/唤醒（问题写入任务状态，等用户回答）
-            result = chat_service.reply(conv_id, message, model, temperature, task_id)
+            if kind == "node":
+                # 工作流节点执行（R6）：节点"大脑"在后端跑，享受同一套
+                # 工具循环 / 权限门控 / AskUser 挂起 / 可取消机制
+                result = chat_service.run_node(payload or {}, model, temperature, task_id)
+            else:
+                result = chat_service.reply(conv_id, message, model, temperature, task_id)
             reply_text = result["reply"] if isinstance(result, dict) else result
             tools_used = result.get("toolsUsed", []) if isinstance(result, dict) else []
 
@@ -325,19 +340,29 @@ def _worker() -> None:
                         QUEUE.remove(task_id)
                     continue
 
-            # AI 回复入库（含工具使用记录）
-            asst_msg = chat_service.register_message(conv_id, "assistant", reply_text)
-            if tools_used:
-                asst_msg["toolsUsed"] = tools_used
-            with _lock:
-                store.add_message(conv_id, asst_msg)
-                store.save_conversations()
-                task["reply"] = reply_text
-                task["toolsUsed"] = tools_used
-                task["status"] = "done"
-                task["activity"] = None
-                task["pendingQuestion"] = None   # 任务结束，清掉待回答问题
-                task["finishedAt"] = _now_iso()
+            if kind == "node":
+                # 节点执行：结果由前端轮询取回写回画布，不写进会话消息
+                with _lock:
+                    task["reply"] = reply_text
+                    task["toolsUsed"] = tools_used
+                    task["status"] = "done"
+                    task["activity"] = None
+                    task["pendingQuestion"] = None
+                    task["finishedAt"] = _now_iso()
+            else:
+                # AI 回复入库（含工具使用记录）
+                asst_msg = chat_service.register_message(conv_id, "assistant", reply_text)
+                if tools_used:
+                    asst_msg["toolsUsed"] = tools_used
+                with _lock:
+                    store.add_message(conv_id, asst_msg)
+                    store.save_conversations()
+                    task["reply"] = reply_text
+                    task["toolsUsed"] = tools_used
+                    task["status"] = "done"
+                    task["activity"] = None
+                    task["pendingQuestion"] = None   # 任务结束，清掉待回答问题
+                    task["finishedAt"] = _now_iso()
         except Exception as e:
             with _lock:
                 if task["status"] == "cancelled":

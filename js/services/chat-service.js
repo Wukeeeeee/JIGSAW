@@ -79,6 +79,10 @@
         JIGSAW.Http.deleteConversation(id).catch(err => {
           JIGSAW.Toast && JIGSAW.Toast.show("删除失败：" + err.message);
         });
+        // 同步删除后端工作流，防止 workflows.json 残留孤儿画布
+        JIGSAW.Http.request("/api/workflows/" + encodeURIComponent("wf-" + id), {
+          method: "DELETE"
+        }).catch(() => {});
       }
     },
 
@@ -271,13 +275,13 @@
         Store.notify("messages");
         done(asstMsg);
 
-        // 同步持久化至后端
+        // 同步持久化至后端（mode 一并带上：工作流会话刷新后仍走画布链路）
         if (JIGSAW.Http && JIGSAW.Http.isRemote()) {
           const curConv = ChatService.get(convId);
           if (curConv && curConv.messages) {
             JIGSAW.Http.request("/api/chat/conversations/" + encodeURIComponent(convId) + "/messages", {
               method: "PUT",
-              body: { messages: curConv.messages }
+              body: { messages: curConv.messages, mode: curConv.mode || "" }
             }).catch(() => {});
           }
         }
@@ -340,17 +344,16 @@
         }, msPerChunk);
       };
 
-      // ② 决定回复从哪来
+      // ② 决定回复从哪来：
+      // - 后端可达 + 非显式工作流会话 → 后端 Agent 主链路（工具循环 / AskUser / 权限 / 任务队列）
+      // - 显式工作流会话（主页「画布编排」创建时 conv.mode = "workflow"）→ 画布链路
+      // - 后端不可达（本地模式）→ 保持浏览器直连链路
+      // 旧版用 workflowTemplate / 关键词正则判断，而 detectTemplate 恒返回 "void"（真值），
+      // 导致普通聊天几乎全部误入工作流分支，后端主链路形同虚设 —— 现在工作流只认显式 mode。
       const wf = JIGSAW.WorkflowService && JIGSAW.WorkflowService.getForConversation(convId);
-      const hasTopology = wf && wf.nodes && wf.nodes.length > 1;
-      const isWorkflowPrompt = wf && (
-        hasTopology ||
-        (conv && conv.workflowTemplate) ||
-        !wf.nodes || wf.nodes.length <= 1 ||
-        /调研|对比|规划|工作流|智能体|agent|workflow|编排|拓扑|运行|执行|开始|启动|生成|制作|画图|绘图|出图|生图|报告|研报/i.test(text)
-      );
+      const isWorkflowPath = !JIGSAW.Http.isRemote() || (conv && conv.mode === "workflow" && !!wf);
 
-      if (JIGSAW.Http.isRemote() && !isWorkflowPrompt) {
+      if (JIGSAW.Http.isRemote() && !isWorkflowPath) {
         // ===== 数据源 = 后端 API（单 Agent 异步问答） =====
         // Http.chat() 只把消息寄给后端并拿到 task_id（毫秒级返回）
         // 然后每 2 秒轮询任务状态，实时显示：排队中 → 正在调用 XX 工具 → 完成

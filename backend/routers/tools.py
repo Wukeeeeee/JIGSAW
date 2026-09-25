@@ -144,12 +144,32 @@ class ExecuteIn(BaseModel):
     args: dict = {}
 
 
+# 该接口没有任务上下文（无 AskUser 挂起、无权限三档弹窗），
+# 高危工具一旦放行，等于绕过 chat_service._run_tool 的整套权限门控。
+# shell/文件写入类工具只允许 AI 在任务链路里经用户确认后调用。
+_DENIED_ON_EXECUTE = {"shell", "editfile", "apply_patch", "AskUser"}
+
+
 @router.post("/tools/execute")
 def execute_tool_endpoint(payload: ExecuteIn):
-    """通用工具执行接口（用于工作流节点自动生图、设置页测试工具等）。"""
+    """通用工具执行接口（用于工作流节点自动生图、设置页测试工具等）。
+
+    仅开放只读/低危工具；高危工具在此直接拒绝，防止绕过权限体系。
+    """
+    name = (payload.name or "").strip()
+    if name in _DENIED_ON_EXECUTE:
+        return {"ok": False, "error": (
+            f"工具「{name}」涉及本机命令执行、文件写入或用户交互，"
+            "仅允许 AI 在任务链路中经权限确认后调用，不能通过该接口直接执行。"
+        )}
+    if name == "knowledge_write" and (payload.args or {}).get("mode") == "overwrite":
+        return {"ok": False, "error": (
+            "knowledge_write 的 overwrite 模式会覆盖原文档，"
+            "仅允许 AI 在任务链路中经用户确认后调用。"
+        )}
     from tools import execute
     try:
-        res = execute(payload.name, payload.args or {})
+        res = execute(name, payload.args or {})
         return {"ok": True, "result": res}
     except Exception as e:
         return {"ok": False, "error": str(e)}

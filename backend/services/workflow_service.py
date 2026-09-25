@@ -11,7 +11,11 @@ STATUS_ORDER = ("waiting", "running", "success", "failed", "skipped")
 
 
 def normalize(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """清洗前端提交的工作流载荷（只保留节点与边，校验基本结构）。"""
+    """清洗前端提交的工作流载荷：保留节点与边（节点字段全量透传，含运行状态）与名称。
+
+    不落盘的字段（如 running 执行标志）在这里被自然丢弃；
+    恢复时残留的 status=running 由前端 loadRemote 复位为 waiting。
+    """
     out: Dict[str, Any] = {}
     if "nodes" in payload:
         out["nodes"] = []
@@ -22,6 +26,8 @@ def normalize(payload: Dict[str, Any]) -> Dict[str, Any]:
             out["nodes"].append(node)
     if "edges" in payload:
         out["edges"] = [dict(e) for e in payload["edges"]]
+    if isinstance(payload.get("name"), str) and payload["name"].strip():
+        out["name"] = payload["name"].strip()
     return out
 
 

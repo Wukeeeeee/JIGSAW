@@ -12,6 +12,64 @@
   const WorkflowService = {
     TEMPLATE_META,
 
+    // ===== 持久化（R5）：后端 workflows.json 是真相源，前端内存是工作副本 =====
+    _saveTimers: new Map(),   // wfId -> 防抖 timer
+
+    /** 防抖自动保存（所有画布变更统一走这里，700ms 合并高频拖动/编辑） */
+    persist(wfId) {
+      if (!JIGSAW.Http || !JIGSAW.Http.isRemote()) return;
+      const wf = this.get(wfId);
+      if (!wf) return;
+      const t = this._saveTimers.get(wfId);
+      if (t) clearTimeout(t);
+      this._saveTimers.set(wfId, setTimeout(() => {
+        this._saveTimers.delete(wfId);
+        const w = this.get(wfId);
+        if (!w) return;
+        JIGSAW.Http.request("/api/workflows/" + encodeURIComponent(wfId), {
+          method: "PUT",
+          body: {
+            name: w.name || "",
+            nodes: (w.nodes || []).map(n => Object.assign({}, n)),
+            edges: (w.edges || []).map(e => Object.assign({}, e))
+          }
+        }).catch(() => {});
+      }, 700));
+    },
+
+    /** 启动时从后端拉全部工作流，覆盖前端内存。
+     *  刷新/重启后画布即恢复；执行中被刷新的 running 标志清零、running 节点复位，
+     *  避免画布带着陈旧执行态锁死（配合视图挂载时的 recover 自愈）。 */
+    async loadRemote() {
+      if (!JIGSAW.Http || !JIGSAW.Http.isRemote()) return;
+      try {
+        const data = await JIGSAW.Http.request("/api/workflows");
+        const list = (data && data.workflows) || [];
+        if (!list.length) return;
+        const st = Store.get();
+        list.forEach(w => {
+          if (!w || !w.id || !Array.isArray(w.nodes)) return;
+          const nodes = w.nodes.map(n => {
+            const c = Object.assign({}, n);
+            if (c.status === "running") c.status = "waiting";
+            return c;
+          });
+          st.workflows[w.id] = {
+            id: w.id,
+            conversationId: w.conversationId || (String(w.id).startsWith("wf-") ? w.id.slice(3) : ""),
+            name: w.name || "",
+            nodes,
+            edges: Array.isArray(w.edges) ? w.edges : [],
+            running: false,
+            executed: nodes.some(n => n.status && n.status !== "waiting")
+          };
+        });
+        Store.notify("workflows");
+      } catch (e) {
+        console.warn("拉取工作流失败", e);          // 后端没起不影响本地使用
+      }
+    },
+
     /** get workflow for conversation, lazily creating from its template */
     getForConversation(convId) {
       const st = Store.get();
@@ -100,6 +158,7 @@
         fallbackValue: ""
       };
       wf.nodes.push(node);
+      this.persist(wfId);
       Store.notify("workflows");
       return node;
     },
@@ -114,6 +173,7 @@
       wf.edges = wf.edges.filter(e => e.from !== nodeId && e.to !== nodeId);
       const ui = Store.get().ui;
       if (ui.selectedNodeId === nodeId) ui.selectedNodeId = null;
+      this.persist(wfId);
       Store.notify("workflows");
       return true;
     },
@@ -126,6 +186,7 @@
         return false; // locked content
       }
       Object.assign(node, patch);
+      this.persist(wfId);
       Store.notify("workflows");
       return true;
     },
@@ -136,6 +197,7 @@
       if (!node || wf.running) return;
       if (!this.isEditable(wf, nodeId)) return;
       node.x = Math.round(x); node.y = Math.round(y);
+      this.persist(wfId);
       Store.notify("workflows");
     },
 
@@ -194,6 +256,7 @@
         label,
         isLoop
       });
+      this.persist(wfId);
       Store.notify("workflows");
       return true;
     },
@@ -206,6 +269,7 @@
       wf.edges = wf.edges.filter(e => e.id !== edgeId);
       const ui = Store.get().ui;
       if (ui.selectedEdgeId === edgeId) ui.selectedEdgeId = null;
+      this.persist(wfId);
       Store.notify("workflows");
       return true;
     },
@@ -239,6 +303,7 @@
         e.status = null;
       });
       wf.executed = false;
+      this.persist(wfId);
       Store.notify("workflows");
     },
 
@@ -246,6 +311,7 @@
       const wf = this.get(wfId);
       if (!wf) return;
       wf.name = name;
+      this.persist(wfId);
       Store.notify("workflows");
     },
 
@@ -259,170 +325,20 @@
       const convId = wfId.replace(/^wf-/, "");
       const chosenModelId = preferredModelId || wf.captainModelId;
 
-      // 1. 尝试调用真实大模型（如 DeepSeek）进行自主任务架构分解
+      // 1. Captain 规划走后端（R6 第二步）：浏览器不再直连规划 LLM，只传 model_id，
+      //    Key 由后端模型库解析；后端按候选级联尝试并解析 JSON。失败降级到本地启发式规划。
       let planData = null;
-
-      function isChatModel(m) {
-        if (!m || !m.apiKey || !m.baseUrl) return false;
-        const mid = (m.modelId || m.model || m.name || "").toLowerCase();
-        const url = (m.baseUrl || "").toLowerCase();
-        if (mid.includes("image") || mid.includes("flux") || mid.includes("dall-e") || url.includes("agnes-ai")) {
-          return false;
-        }
-        return true;
-      }
-
-      // 提取所有可用于对话与任务编排的真实大模型候选（过滤掉纯生图模型如 Agnes/FLUX 等）
-      const candidateModels = [];
-      if (chosenModelId && JIGSAW.ModelService) {
-        const pref = JIGSAW.ModelService.byId(chosenModelId);
-        if (isChatModel(pref)) {
-          candidateModels.push(pref);
-          wf.captainModelId = pref.id;
-        }
-      }
-
-      if (JIGSAW.ModelService) {
-        const active = JIGSAW.ModelService.getActive();
-        if (isChatModel(active) && !candidateModels.some(c => c.id === active.id)) candidateModels.push(active);
-        const all = JIGSAW.ModelService.list() || [];
-        all.forEach(m => {
-          if (isChatModel(m) && !candidateModels.some(c => c.id === m.id)) {
-            candidateModels.push(m);
-          }
-        });
-      }
-      const customs = (Store.get().settings && Store.get().settings.model && Store.get().settings.model.custom) || [];
-      customs.forEach(c => {
-        if (isChatModel(c) && !candidateModels.some(cm => cm.apiKey === c.apiKey && cm.baseUrl === c.baseUrl)) {
-          candidateModels.push(c);
-        }
-      });
-
-      // 依次尝试候选真实大模型（如 DeepSeek）进行 DAG 自主任务编排
-      for (const model of candidateModels) {
-        if (planData) break;
+      let plannedWithModelId = chosenModelId || "";
+      if (JIGSAW.Http && JIGSAW.Http.isRemote()) {
         try {
-          let endpoint = model.baseUrl.trim().replace(/\/+$/, "");
-          if (!endpoint.endsWith("/chat/completions")) {
-            endpoint = endpoint.endsWith("/v1") ? endpoint + "/chat/completions" : endpoint + "/chat/completions";
-          }
-          let modelName = model.model || model.modelId || "deepseek-chat";
-          if (model.baseUrl.includes("deepseek.com")) {
-            if (!modelName.toLowerCase().includes("reasoner")) {
-              modelName = "deepseek-chat";
-            } else {
-              modelName = "deepseek-reasoner";
-            }
-          }
-          const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 30000);
-          const res = await fetch(endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${model.apiKey}`
-            },
-            body: JSON.stringify({
-              model: modelName,
-              messages: [
-                {
-                  role: "system",
-                  content: `你是一个顶尖的多智能体工作流架构师（Captain Agent）。请深入剖析用户的真实任务目标与依赖关系，规划出符合人类逻辑常理的多智能体协作图（DAG 拓扑链路）。
-
-【绝对红线（严禁犯逻辑死循环错误）】：
-❌ 严禁把“最终交付动作”（如：生成图片/画图/输出方案/编写代码/撰写综合报告）误当成和前期素材采集“同时并行的子任务”！
-   - 严重错误：若用户指令包含“搜集素材后生成图片/报告”，把“生成图片/报告”也当成起点分发的并行任务。此时图片/报告还没任何素材，同时启动属于严重逻辑错误！
-   - 正确逻辑：
-     1. 前置各素材采集/专项调研节点必须直接依赖任务起点（dependsOn: []）；
-     2. 终极创作/总成报告节点必须依赖上述所有前置节点（dependsOn: ["node1_id", "node2_id", ...]），在上游素材全部到位后再聚合启动！
-
-【任务复杂度自适应伸缩准则（Dynamic Complexity Scaling）】：
-智能体数量和流水线深度必须根据用户任务的实际复杂度【自适应伸缩】，严禁对简单任务杀鸡用牛刀，也严禁对复杂任务浮于表面：
-1. 极简/单点任务（如：润色一段文字、单一概念查询、单句翻译、单一简短问答）：
-   - 节点规模：1 ~ 2 个节点；
-   - 拓扑结构：单节点直出 或 起点 ➔ 执行节点 ➔ 交付；严禁滥用复杂的与门汇聚与多阶段。
-2. 中等专项任务（如：单一实体资料调研、宣传配图绘制、两项事物基础对比）：
-   - 节点规模：3 ~ 4 个节点；
-   - 拓扑结构：2~3路并行前置探索 ➔ 终极总成交付。
-3. 复杂长文本/重型课题任务（如：长篇需求、多约束业务命题、跨行业竞争推演、万字报告）：
-   - 节点规模：5 ~ 7 个节点；
-   - 拓扑结构：启动 3 ~ 4 阶纵深流水线（第一阶段事实数据 ➔ 第二阶段量化建模/壁垒解构 ➔ 第三阶段全景战略研报 ➔ 第四阶段下游实施路线图与落地预案）。
-
-【多智能体纵深递进架构准则（针对中高复杂度任务打破单层扁平模式，具备向下深度拓展能力）】：
-真正专业的高级工作流必须具备【纵向阶段递进（Multi-Stage Depth）】与【下游落地拓展（Downstream Extension）】的能力：
-
-1. 纵深递进分层：
-   - 第一阶段【多维数据与事实情报层】：（dependsOn: []，并行业务探索，必须明确配置 tools: ["websearch"] 或 ["websearch", "fetch_url"] 获取客观数据）；
-   - 第二阶段【深度交叉分析与量化推演层】：（dependsOn: [第一阶段对应节点]，基于前期采集数据，展开技术壁垒深度解构、量化财务测算 tools: ["calc"]、竞品攻防博弈等深入推演）；
-   - 第三阶段【全局战略研判与决策总成层】：（dependsOn: [第二阶段节点]，汇总各维深入成果，形成全景研报与核心判断）；
-   - 第四阶段【下游方案落地与全景交付文档】：（dependsOn: [第三阶段节点]，进一步向下拓展：规划落地行动路线图 Roadmap、商业化策略落地方案与风险预案，输出一份排版严整、可直接交付的完整全景分析文档；仅在用户明确要求存库时才配置 tools: ["knowledge_write"]）。
-
-2. 节点工具调用指令必须具体明确（Explicit Tool Directives）：
-   - 在每个智能体的 desc 与 prompt 中，必须明确交代：
-     - 本节点明确调用的工具名称（如 websearch / calc / generate_image / knowledge_write）；
-     - 检索的具体关键词、指标定义或测算模型；
-     - 明确交付物格式与结构，严禁泛泛空谈！
-
-【系统可用工具库清单】：
-- websearch: 网页实时搜索。必配场景：市场调研、竞品分析、最新行业资讯、事实数据核查、外部资料采集等任何需要联网获取客观信息的节点。
-- fetch_url: 网页正文深度抓取。适用场景：抓取特定网页长文、深度研报或长文解析。
-- generate_image: AI 图像/海报生成。必配场景：海报制作、画面构思、视觉概念图、插画、宣传配图与渲染图绘制节点。
-- knowledge_search: 本地知识库检索。适用场景：查询私有资料、内部文档、行业白皮书等已收录资料。
-- knowledge_write: 写入本地知识库。适用场景：将最终综合调研报告或结构化结论归档保存至知识库。
-- calc: 精确计算器。适用场景：财务指标测算、复合年均增长率(CAGR)、估值建模、量化数据计算。
-- get_current_time: 获取当前系统时间。适用场景：事件时间线梳理、最新时效性对比。
-
-【智能体节点工具分配准则（非常重要！务必根据节点职责精准赋予 tools 数组，绝不可一律留空）】：
-1. 专项调研 / 行业情报 / 竞品信息 / 外部数据采集节点：
-   👉 必须配置 tools: ["websearch"] 或 tools: ["websearch", "fetch_url"]！赋予智能体实时的互联网检索能力，严禁无工具闭门造车！
-2. 涉及生图 / 海报 / 概念图 / 视觉创作节点：
-   👉 必须配置 tools: ["generate_image"]！
-3. 涉及财务指标测算 / 复合增长率(CAGR) / 估值 / 精确统计节点：
-   👉 必须配置 tools: ["calc"]！
-4. 涉及企业内部私有资料 / 历史研报分析节点：
-   👉 配置 tools: ["knowledge_search"]！
-5. 最终综合决策研报 / 方案总成交付节点：
-   👉 可配置 tools: ["knowledge_write"]（将最终研报归档入知识库）或兼配 tools: ["calc"]！
-6. 纯逻辑控制 / 聚合汇总但无需额外工具的节点：可填 []。
-
-【输出格式规范】：
-必须直接返回纯 JSON 对象（无需 markdown 包裹）：
-{
-  "workflowName": "根据用户任务定制的工作流总体标题",
-  "nodes": [
-    {
-      "id": "简短英文id",
-      "name": "针对用户任务的智能体名称",
-      "desc": "职责说明",
-      "prompt": "专业系统提示词，规定其工作范畴与产出标准",
-      "tools": ["websearch"],  // 根据上述规则精准配置，如 ["websearch"]、["generate_image"]、["calc"] 等
-      "dependsOn": []
-    }
-  ]
-}`
-                },
-                { role: "user", content: `用户任务需求：${userPrompt}` }
-              ],
-              temperature: 0.1
-            }),
-            signal: controller.signal
-          });
-          clearTimeout(tid);
-
-          if (res.ok) {
-            const data = await res.json();
-            const text = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-            if (text) {
-              const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-              const match = cleaned.match(/\{[\s\S]*\}/);
-              if (match) {
-                planData = JSON.parse(match[0]);
-              }
-            }
+          const res = await JIGSAW.Http.planWorkflow(userPrompt, chosenModelId || "");
+          if (res && res.ok && res.plan) {
+            planData = res.plan;
+            plannedWithModelId = res.model_id || plannedWithModelId;
+            if (plannedWithModelId) wf.captainModelId = plannedWithModelId;
           }
         } catch (e) {
-          console.warn("Captain Agent LLM 规划失败，尝试下一个候选模型：", e);
+          console.warn("Captain 后端规划失败，使用本地启发式兜底：", e);
         }
       }
 
@@ -437,8 +353,25 @@
           desc: n.desc || n.description || "",
           prompt: n.prompt || n.systemPrompt || `你负责执行【${n.name}】。`,
           tools: Array.isArray(n.tools) ? n.tools : [],
-          dependsOn: Array.isArray(n.dependsOn) ? n.dependsOn : []
+          dependsOn: Array.isArray(n.dependsOn) ? n.dependsOn : [],
+          // Captain 分支/循环拓扑字段（R6 第三步）：type = agent | condition | loop
+          planType: (n.type || "agent").toLowerCase(),
+          onTrue: Array.isArray(n.onTrue) ? n.onTrue : [],
+          onFalse: Array.isArray(n.onFalse) ? n.onFalse : [],
+          onLoop: Array.isArray(n.onLoop) ? n.onLoop : [],
+          onDone: Array.isArray(n.onDone) ? n.onDone : [],
+          loopMax: Number(n.loopMax) > 0 ? Math.min(9, Math.floor(Number(n.loopMax))) : 3
         }));
+        // 分支/循环目标并入目标节点 dependsOn：保证拓扑层级（深度/列布局）计算正确；
+        // 分支边本身在建图阶段单独生成（带 True/False/Loop/Done 端口），不走默认依赖边。
+        // ★ onLoop 回环目标不并入：回环是向后的执行边，并入会造成层级环（死循环）。
+        const planById = new Map(rawPlanNodes.map(rn => [rn.id, rn]));
+        rawPlanNodes.forEach(rn => {
+          [...rn.onTrue, ...rn.onFalse, ...rn.onDone].forEach(t => {
+            const target = planById.get(t);
+            if (target && !target.dependsOn.includes(rn.id)) target.dependsOn.push(rn.id);
+          });
+        });
       } else if (planData && Array.isArray(planData.subtasks) && planData.subtasks.length >= 1) {
         // 兼容旧格式 subtasks + summaryName
         const wIds = planData.subtasks.map((_, i) => `w_${i + 1}`);
@@ -667,9 +600,9 @@
       }
 
       // 4. 通用 DAG 图拓扑生成与自适应坐标计算 (支持任意拓扑：串行、分叉、汇聚门控)
-      // 选取用于普通节点的默认模型 ID（优先纯文本对话模型，严禁绑定纯生图模型）
-      const chatModel = candidateModels[0] || (JIGSAW.ModelService && JIGSAW.ModelService.getActive());
-      const modelId = (chatModel && chatModel.id) || "deepseek-chat";
+      // 节点默认模型：优先 Captain 规划实际使用的模型，否则当前激活模型（执行期还会兜底）
+      const activeModel = JIGSAW.ModelService && JIGSAW.ModelService.getActive();
+      const modelId = plannedWithModelId || (activeModel && activeModel.id) || "";
 
       const startNodeId = convId + "-n-start";
       const startNode = {
@@ -697,12 +630,16 @@
 
       const nodeDepth = new Map();
       nodeDepth.set(startNodeId, 0);
+      const computing = new Set();
 
       function getDepth(nId) {
         if (nodeDepth.has(nId)) return nodeDepth.get(nId);
+        if (computing.has(nId)) return 0;   // 依赖环保护（含 loop 回环场景）
+        computing.add(nId);
         const node = rawPlanNodes.find(rn => rn.id === nId);
         if (!node || !node.dependsOn || node.dependsOn.length === 0) {
           nodeDepth.set(nId, 1);
+          computing.delete(nId);
           return 1;
         }
         let maxD = 0;
@@ -711,9 +648,32 @@
         });
         const d = maxD + 1;
         nodeDepth.set(nId, d);
+        computing.delete(nId);
         return d;
       }
       rawPlanNodes.forEach(rn => getDepth(rn.id));
+
+      // 分支/循环端口边映射（R6 第三步）：这些边带 True/False/Loop/Done 端口，
+      // 取代对应目标节点上来自控制节点的默认依赖边，也不参与 AND 门注入
+      const branchEdgesFrom = new Map();   // planNodeId -> [{to, fromPort}]
+      const branchCovered = new Map();     // targetPlanId -> Set<sourcePlanId>
+      rawPlanNodes.forEach(rn => {
+        const list = [];
+        if (rn.planType === "condition") {
+          rn.onTrue.forEach(t => list.push({ to: t, fromPort: "true" }));
+          rn.onFalse.forEach(t => list.push({ to: t, fromPort: "false" }));
+        } else if (rn.planType === "loop") {
+          rn.onLoop.forEach(t => list.push({ to: t, fromPort: "loop" }));
+          rn.onDone.forEach(t => list.push({ to: t, fromPort: "done" }));
+        }
+        if (list.length) {
+          branchEdgesFrom.set(rn.id, list);
+          list.forEach(l => {
+            if (!branchCovered.has(l.to)) branchCovered.set(l.to, new Set());
+            branchCovered.get(l.to).add(rn.id);
+          });
+        }
+      });
 
       // 组装最终节点与连线，自动在多路依赖处注入与门 (AND Gate)
       const finalNodes = [startNode];
@@ -741,6 +701,12 @@
           if (isCalc && !tools.includes("calc")) tools.push("calc");
         }
 
+        // 控制节点（条件/循环）不需要工具：判定交给 LLM 或迭代计数
+        if (rn.planType === "condition" || rn.planType === "loop") {
+          rn.tools = [];
+          return;
+        }
+
         // 每次配置工具时，自动附带当前时间工具 (get_current_time)，提供精准时效基准
         if (tools.length > 0 && !tools.includes("get_current_time")) {
           tools.push("get_current_time");
@@ -761,12 +727,17 @@
         const activeImg = (isVisual && JIGSAW.ImageService) ? JIGSAW.ImageService.getActive() : null;
         const nodeTools = Array.isArray(rn.tools) ? rn.tools : [];
 
+        // Captain 规划类型映射：agent / condition / loop
+        const planType = (rn.planType === "condition" || rn.planType === "loop") ? rn.planType : "agent";
+        const agentType = planType === "condition" ? "condition_if" : (planType === "loop" ? "loop_ctrl" : "agent");
+        const isCtrl = planType !== "agent";
+
         const agentNode = {
           id: mappedId,
-          agentType: "agent",
-          category: "agent",
+          agentType,
+          category: isCtrl ? "logic" : "agent",
           name: rn.name,
-          icon: isVisual ? "image" : "agent",
+          icon: isCtrl ? (planType === "condition" ? "condition" : "loop") : (isVisual ? "image" : "agent"),
           description: rn.desc,
           modelId,
           imageModelId: activeImg ? activeImg.id : "",
@@ -778,12 +749,20 @@
           maxToolCalls: 5,
           onError: "abort",
           skipped: false,
-          rawDepth: nodeDepth.get(rn.id)
+          rawDepth: nodeDepth.get(rn.id),
+          conditionOutcome: planType === "condition" ? "true" : null,
+          loopMax: planType === "loop" ? rn.loopMax : null,
+          iteration: planType === "loop" ? 0 : null
         };
 
-        const deps = (rn.dependsOn || []).filter(d => idMap.has(d));
-        if (deps.length === 0) {
-          // 直接依赖起点
+        // 分支来源的默认依赖边已被端口边取代（branchCovered），不参与 AND 门与 start 兜底
+        const covered = branchCovered.get(rn.id) || new Set();
+        const rawDeps = (rn.dependsOn || []).filter(d => idMap.has(d));
+        const deps = rawDeps.filter(d => !covered.has(d));
+        const hasRealDep = rawDeps.length > 0;
+
+        if (deps.length === 0 && !hasRealDep) {
+          // 无任何依赖 → 直接依赖起点
           finalEdges.push({
             id: `${convId}-e-start-${rn.id}`,
             from: startNodeId,
@@ -800,7 +779,7 @@
             fromPort: "out",
             toPort: "in"
           });
-        } else {
+        } else if (deps.length >= 2) {
           // 多路汇聚依赖：自动注入与门 (AND Gate)
           gateCount++;
           const gateId = `${convId}-n-gate${gateCount}`;
@@ -843,6 +822,25 @@
         finalNodes.push(agentNode);
       });
 
+      // 分支/循环端口边统一生成（True/False/Loop/Done）
+      const portLabels = { "true": "True", "false": "False", "loop": "Loop", "done": "Done" };
+      branchEdgesFrom.forEach((list, src) => {
+        const fromId = idMap.get(src);
+        list.forEach(l => {
+          const toId = idMap.get(l.to);
+          if (!fromId || !toId) return;
+          finalEdges.push({
+            id: `${convId}-e-b-${src}-${l.fromPort}-${l.to}`,
+            from: fromId,
+            to: toId,
+            fromPort: l.fromPort,
+            toPort: "in",
+            label: portLabels[l.fromPort] || "",
+            isLoop: l.fromPort === "loop"
+          });
+        });
+      });
+
       // 5. 坐标优雅计算 (按 column 优雅居中排布)
       // 重新对所有节点依据拓扑排布列分配 column
       const sortedNodes = finalNodes.filter(n => n.id !== startNodeId).sort((a, b) => (a.rawDepth || 0) - (b.rawDepth || 0));
@@ -881,6 +879,7 @@
       if (workflowTitle) wf.name = workflowTitle;
       wf.executed = false;
       wf.running = false;
+      this.persist(wf.id);
       Store.notify("workflows");
       return true;
     },
